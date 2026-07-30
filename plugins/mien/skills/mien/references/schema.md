@@ -223,7 +223,7 @@ A value must be a **string** — `"custom": {"ANTHROPIC_API_KEY": 5}` is `profil
 
 ### `git_email`
 
-The git author address a commit under this identity carries. Hand-edited, like `default_for` / `owns_remotes`.
+The git author address a commit under this identity carries. Hand-edited, like `default_for`.
 
 ```jsonc
 "git_email": "me@acme.example"
@@ -286,6 +286,13 @@ a bare owner (`github.com/acme`) claims the owner and its repositories. The
 longest match wins; an exact tie is an error, as with `default_for`. A profile may
 list several — a personal account and the organizations it also manages. Same
 list-of-strings rule: a bare string is rejected, not coerced.
+
+**Written by `mien discover --own <host/owner> --profile <name>`**, which appends
+`<host/owner>/*` after checking that a repository under the scanned roots really
+has that owner and that no other profile already claims it — then re-reads the
+saved config and resolves that repository's remote to prove the glob claims it.
+Plain `mien discover` only reports; claiming is a separate, explicit act, because
+a repository's own signal must never configure identity by being looked at.
 
 **It never selects an acting identity.** `owns_remotes` feeds the display surfaces (`mien statusline`, `mien prompt`) — which show whose repository this is and warn when the active `MIEN_PROFILE` disagrees — and `mien guard`, which *refuses* on that same disagreement. Blocking on the repository's own signal is safe: a crafted `origin` can at worst cause a false refusal you can override, never a mis-action. It is deliberately *not* consulted by `mien which` / `run` / `exec`, which choose an identity that *acts*: a checked-out repository controls its own `origin`, and letting a repository select an acting identity would violate the rule that a clone cannot influence which identity acts. A directory scope is part of your own config and may select an acting identity; a repository's self-declared remote may not.
 

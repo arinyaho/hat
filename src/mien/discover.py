@@ -1,10 +1,17 @@
-"""Inventory the identities already configured on this machine, so onboarding is
-"here's what you have, import what you want" rather than a blank config.
+"""Inventory the identities and the places already on this machine, so onboarding
+is "here's what you have, claim what you want" rather than a blank config.
 
-Read-only: it inspects the local config of each provider (AWS/OCI profiles,
-gcloud configurations, GitHub accounts) and reports which are already bound to a
-mien profile and which are not, with the command to import each. It never reads a
-secret and never writes anything — importing stays an explicit `mien login`.
+Two halves, both read-only. Credentials: the local config of each provider
+(AWS/OCI profiles, gcloud configurations, GitHub accounts), reported as already
+bound to a mien profile or not, with the `mien login` to import each. Places: the
+git remote owners of the repositories on this machine, reported as already
+claimed by some profile's `owns_remotes` or not — which is what the status line,
+`mien guard` and `mien exec` read to answer "whose place is this", and what is
+empty on a fresh machine because nothing ever wrote it.
+
+Nothing here reads a secret, touches a backend, or writes anything. Importing a
+credential stays an explicit `mien login`; claiming an owner stays an explicit
+`mien discover --own`.
 """
 
 from __future__ import annotations
@@ -16,13 +23,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mien.config import Profile
+from mien.resolve import (AmbiguousScope, git_origin_remote, normalize_remote,
+                          resolve_remote_profile)
 
 
 @dataclass(frozen=True)
 class Found:
-    provider: str      # "aws" | "oci" | "gcloud" | "github"
-    identifier: str    # profile / config / account name — how a mien profile refers to it
-    detail: str = ""   # e.g. the account email behind a gcloud config
+    provider: str      # "aws" | "oci" | "gcloud" | "github" | "remote"
+    identifier: str    # profile / config / account name, or a `host/owner` remote owner
+    detail: str = ""   # e.g. the account email behind a gcloud config, or a
+                       # sample repository remote behind an owner
 
 
 def _ini(path: Path) -> configparser.ConfigParser:
@@ -85,6 +95,83 @@ def discover_github(run=subprocess.run) -> list[Found]:
     return found
 
 
+# How far below a scan root a repository is still found. Deep enough for the two
+# shapes people actually use — `~/Projects/<repo>` and `~/<employer>/<client>/
+# <repo>` — and shallow enough to stay cheap: on the author's machine it visits
+# ~2000 directories in 0.2s, versus a full `$HOME` walk. Descent also stops at
+# every repository, so no repo's own tree is ever walked.
+# ponytail: fixed depth, not a knob — `--scan-root` already points the walk at
+# anything deeper, and a second number to tune is a worse answer than a path.
+_SCAN_DEPTH = 3
+
+
+def _git_repos(root: Path, depth: int) -> list[Path]:
+    """Git repositories at or under ``root``, at most ``depth`` levels down.
+
+    Hidden directories are skipped, which is also what keeps the walk out of
+    `.git` and its `worktrees/` bookkeeping. Symlinked directories are not
+    followed, so a link cannot walk the scan out of the tree it was pointed at.
+    Descent stops at a repository: everything below one is that same repository.
+    """
+    if (root / ".git").exists():
+        return [root]
+    if depth <= 0:
+        return []
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return []
+    repos: list[Path] = []
+    for entry in entries:
+        if entry.name.startswith(".") or entry.is_symlink() or not entry.is_dir():
+            continue
+        repos.extend(_git_repos(entry, depth - 1))
+    return repos
+
+
+def discover_remotes(
+    roots: list[Path] | None = None, *, depth: int = _SCAN_DEPTH, origin=git_origin_remote
+) -> list[Found]:
+    """The git remote owners of the repositories on this machine.
+
+    One `Found` per `host/owner`, with a sample repository remote as its detail —
+    the sample is what a claim is verified against, so a glob offered here is
+    known to match a real repository rather than assumed to.
+
+    Owners come from the same `normalize_remote` form `owns_remotes` is matched
+    in, so what is reported and what is written mean one thing. A remote with no
+    owner segment (`host/repo`, some self-hosted setups) is skipped rather than
+    reported as owning a whole host.
+    """
+    owners: dict[str, str] = {}
+    for root in roots or [Path(os.environ.get("HOME", str(Path.home())))]:
+        for repo in _git_repos(Path(root), depth):
+            url = origin(str(repo))
+            if not url:
+                continue
+            norm = normalize_remote(url)
+            parts = norm.split("/")
+            if len(parts) < 3:
+                continue
+            owners.setdefault("/".join(parts[:2]), norm)
+    return [Found("remote", owner, sample) for owner, sample in sorted(owners.items())]
+
+
+def owner_glob(owner: str) -> str:
+    """The `owns_remotes` glob that claims ``owner`` and its repositories."""
+    return f"{owner.strip().rstrip('/').lower()}/*"
+
+
+def _remote_claimed_by(profiles: dict[str, Profile], remote: str) -> str | None:
+    """Which profile already claims ``remote`` — by the exact rule the acting code
+    uses, so "covered" here means covered there. An ambiguous claim is still a
+    claim; it is reported as one rather than offered again."""
+    try:
+        return resolve_remote_profile(profiles, remote)
+    except AmbiguousScope:
+        return "several profiles"
+
+
 def discover_all(home: Path | None = None, *, github_run=subprocess.run) -> list[Found]:
     home = home or Path(os.environ.get("HOME", str(Path.home())))
     return (discover_aws(home) + discover_oci(home) + discover_gcloud(home)
@@ -117,6 +204,8 @@ def _import_hint(item: Found) -> str:
     if item.provider == "gcloud":
         email = f" --email {item.detail}" if item.detail else ""
         return f"mien login {p} --service google{email} --client-id <id>"
+    if item.provider == "remote":
+        return f"mien discover --own {item.identifier} --profile {p}"
     return ""
 
 
@@ -124,12 +213,13 @@ def render_report(found: list[Found], profiles: dict[str, Profile]) -> str:
     """A human report: per provider, each discovered identity marked as already in
     a mien profile or not imported (with the command to import it)."""
     if not found:
-        return ("No local AWS / OCI / gcloud / GitHub identities found to import. "
-                "Set one up with `mien login`.")
+        return ("No local AWS / OCI / gcloud / GitHub identities or git repositories "
+                "found. Set an identity up with `mien login`.")
     labels = {"aws": "AWS profiles", "oci": "OCI profiles",
-              "gcloud": "gcloud configurations", "github": "GitHub accounts"}
+              "gcloud": "gcloud configurations", "github": "GitHub accounts",
+              "remote": "Git remote owners"}
     lines: list[str] = []
-    for provider in ("github", "gcloud", "aws", "oci"):
+    for provider in ("remote", "github", "gcloud", "aws", "oci"):
         items = [f for f in found if f.provider == provider]
         if not items:
             continue
@@ -137,6 +227,17 @@ def render_report(found: list[Found], profiles: dict[str, Profile]) -> str:
         lines.append(f"{labels[provider]}:")
         for item in items:
             detail = f" ({item.detail})" if item.detail else ""
+            if provider == "remote":
+                # Coverage is decided by resolving the sample remote, not by
+                # comparing strings: whatever `resolve_remote_profile` answers is
+                # what the status line, guard and exec will answer here.
+                claimed = _remote_claimed_by(profiles, item.detail)
+                if claimed:
+                    lines.append(f"  ✓ {item.identifier} — owned by {claimed}")
+                else:
+                    lines.append(f"  · {item.identifier}{detail} — no profile owns it")
+                    lines.append(f"      {_import_hint(item)}")
+                continue
             if item.identifier in bound:
                 lines.append(f"  ✓ {item.identifier}{detail} — in a mien profile")
             else:

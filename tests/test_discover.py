@@ -2,7 +2,8 @@ import subprocess
 
 from mien.config import AWSService, GitHubService, GoogleService, OCIService, Profile
 from mien.discover import (Found, discover_aws, discover_gcloud, discover_github,
-                           discover_oci, render_report)
+                           discover_oci, discover_remotes, owner_glob,
+                           render_report)
 
 
 def test_discover_aws_reads_config_and_credentials(tmp_path):
@@ -68,3 +69,57 @@ def test_render_report_marks_bound_and_unbound():
 
 def test_render_report_empty():
     assert "No local" in render_report([], {})
+
+
+def _repo(root, rel, url):
+    """A directory that looks like a git repository, with a remote to report."""
+    path = root / rel
+    (path / ".git").mkdir(parents=True)
+    return str(path), url
+
+
+def test_discover_remotes_groups_by_owner_and_stays_in_the_tree(tmp_path):
+    home = tmp_path / "home"
+    urls = dict([
+        _repo(home, "Projects/api", "git@github.com:acme-inc/api.git"),
+        _repo(home, "Projects/web", "https://github.com/acme-inc/web.git"),
+        _repo(home, "Projects/blog", "https://github.com/me/blog"),
+        # Too deep for the default depth, and hidden — neither is visited.
+        _repo(home, "a/b/c/deep", "https://github.com/deep/deep"),
+        _repo(home, ".cache/hidden", "https://github.com/hidden/hidden"),
+        # No owner segment: claiming a whole host is not something to offer.
+        _repo(home, "Projects/hostonly", "git@internal.example:standalone.git"),
+    ])
+    outside = tmp_path / "outside"
+    (outside / "secret" / ".git").mkdir(parents=True)
+    urls[str(outside / "secret")] = "https://github.com/outside/secret"
+    (home / "Projects" / "link").symlink_to(outside)
+
+    found = discover_remotes([home], origin=urls.get)
+    assert [(f.provider, f.identifier) for f in found] == [
+        ("remote", "github.com/acme-inc"), ("remote", "github.com/me")]
+    # The detail is a real remote of that owner — what a claim is verified against.
+    assert found[0].detail.startswith("github.com/acme-inc/")
+
+
+def test_discover_remotes_does_not_descend_into_a_repo(tmp_path):
+    urls = dict([_repo(tmp_path, "Projects/api", "https://github.com/acme/api")])
+    nested, _ = _repo(tmp_path / "Projects" / "api", "vendor/dep",
+                      "https://github.com/other/dep")
+    urls[nested] = "https://github.com/other/dep"
+    assert [f.identifier for f in discover_remotes([tmp_path], origin=urls.get)] == [
+        "github.com/acme"]
+
+
+def test_render_report_marks_owned_remotes_and_offers_the_rest():
+    found = [Found("remote", "github.com/acme-inc", "github.com/acme-inc/api"),
+             Found("remote", "github.com/me", "github.com/me/blog")]
+    profiles = {"work": Profile(name="work", owns_remotes=["github.com/acme-*/*"])}
+    report = render_report(found, profiles)
+    assert "✓ github.com/acme-inc — owned by work" in report
+    assert "· github.com/me (github.com/me/blog) — no profile owns it" in report
+    assert "mien discover --own github.com/me --profile <profile>" in report
+
+
+def test_owner_glob_claims_the_owner():
+    assert owner_glob("GitHub.com/Acme/") == "github.com/acme/*"

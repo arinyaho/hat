@@ -95,9 +95,13 @@ mien login personal --service slack --workspace team-a
 mien login personal --service custom --name ANTHROPIC_API_KEY   # a credential of your own
 ```
 
-`mien discover` is the onboarding shortcut: it inventories the AWS/OCI profiles, gcloud configurations, and GitHub accounts already configured locally, and shows which are bound to a mien profile and which are not — with the `mien login` command to import each:
+`mien discover` is the onboarding shortcut: it inventories the identities already configured locally (AWS/OCI profiles, gcloud configurations, GitHub accounts) *and* the places — the git remote owners of the repositories on this machine — showing which are already bound to a mien profile and which are not, with the command to bind each:
 
 ```
+Git remote owners:
+  ✓ github.com/acme-inc — owned by work
+  · github.com/me (github.com/me/blog) — no profile owns it
+      mien discover --own github.com/me --profile <profile>
 GitHub accounts:
   ✓ octocat (github.com) — in a mien profile
   · octo-work (github.com) — not imported
@@ -107,7 +111,9 @@ AWS profiles:
       mien login <profile> --service aws --aws-profile work
 ```
 
-It reads no secret and writes nothing — importing stays an explicit `mien login`.
+It reads no secret and touches no backend. The repository scan looks under your home directory, three levels down, skipping dotted directories and never following a symlink out; point it elsewhere with `--scan-root <dir>` (repeatable).
+
+Claiming an owner is the one thing that writes: `mien discover --own github.com/me --profile personal` adds `github.com/me/*` to that profile's [`owns_remotes`](#project-pinned-identity) — which is what the status line, `mien guard` and `mien exec` read to tell whose place a repository is. It is a separate, explicit act, because a repository's own signal must never configure identity by merely being looked at. Importing a credential stays an explicit `mien login`.
 
 See `skills/mien/references/` for full docs.
 
@@ -199,7 +205,7 @@ It figures out whose place this is from two signals — the repository's `origin
 }
 ```
 
-A profile can own several remote patterns — a personal account and the organizations it also manages. The remote owner **never selects an identity**: it drives the status line's display and warning, and it can *refuse* an action (`mien guard`, and the `mien exec` check below), but it never decides which profile `which`/`run` resolve to — because a checked-out repository controls its own remote and must not be able to choose the identity that acts. Blocking is the safe direction: a crafted `origin` can at worst cost you a false refusal, never a mis-action. It reads config names and scopes only, never a token, so it is safe to run at status-line frequency, and it prints nothing when `mien` is not configured.
+`mien discover` finds the owners on this machine and prints the `--own` line to record each (see [Bootstrap](#bootstrap)), so this list need not be written by hand. A profile can own several remote patterns — a personal account and the organizations it also manages. The remote owner **never selects an identity**: it drives the status line's display and warning, and it can *refuse* an action (`mien guard`, and the `mien exec` check below), but it never decides which profile `which`/`run` resolve to — because a checked-out repository controls its own remote and must not be able to choose the identity that acts. Blocking is the safe direction: a crafted `origin` can at worst cost you a false refusal, never a mis-action. It reads config names and scopes only, never a token, so it is safe to run at status-line frequency, and it prints nothing when `mien` is not configured.
 
 ## Refuse to act as the wrong you
 
