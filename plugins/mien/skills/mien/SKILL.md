@@ -184,7 +184,7 @@ Do not use an `env` dump for that question. `exec` merges the profile's variable
 $MIEN exec <profile> -- printenv ATLASSIAN_BASE_URL
 ```
 
-(Only for the non-secret ones — `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, `CLOUDSDK_CORE_PROJECT`, `OCI_CLI_PROFILE`, `OCI_CLI_CONFIG_FILE`. Never print a token-valued variable, and never a custom one — a custom variable's value is always a secret; see *Important rules*.)
+(Only for the non-secret ones a service block always sets — `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `CLOUDSDK_ACTIVE_CONFIG_NAME`. Never print a token-valued variable, and never a custom one — a custom variable's value is always a secret; see *Important rules*.)
 
 What each service contributes, when the profile configures it:
 
