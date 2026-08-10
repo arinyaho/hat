@@ -203,7 +203,7 @@ Profiles differ, and the difference is the point — one may carry Atlassian + G
 
 For Gmail/Calendar/Drive (no helper in v1). Google is the one service with no bare-token
 variable: `exec` exports `GOOGLE_APPLICATION_CREDENTIALS`, an ADC *file path*, which a
-Google client library reads directly — prefer that. For a raw HTTP call, let the child
+Google client library reads directly — prefer that. It is exported only when the profile stores OAuth credentials; for a gcloud-login-only Google identity the variable is absent and a client library silently falls back to the machine's ambient ADC — the call then runs as whatever identity that file holds, so confirm with `whoami <profile>` before trusting a client-library recipe. For a raw HTTP call, let the child
 shell mint the token from that same ADC file so it never reaches your shell or the
 transcript:
 
