@@ -173,10 +173,18 @@ For a single service you can also inline the comparison, since a bare `gh api us
 Site URLs, account emails and workspace names are **in the profile**. Guessing them wastes time and, worse, sometimes succeeds: an Atlassian site that exists but grants this account nothing authenticates cleanly and returns an empty result set, which reads exactly like "no data" rather than "wrong site".
 
 ```bash
-$MIEN exec <profile> -- env | grep -E '^(ATLASSIAN|NOTION|GH_|GOOGLE_|AWS_|MIEN_SLACK)' | sed 's/=.*/=<set>/'
+$MIEN whoami <profile>
 ```
 
-(`sed` because the values are secrets — see *Important rules*. Drop it only for the non-secret ones: `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`.) `$MIEN whoami <profile>` is the secret-free equivalent and is the safer first call.
+That card is built from the profile's configuration, so it is the authority on which services this profile actually carries — and it already prints the values you would otherwise guess: the Atlassian site URL and account email, the GitHub username, the Google address, the Slack workspaces, the AWS profile and region, the names of any custom variables.
+
+Do not use an `env` dump for that question. `exec` merges the profile's variables *over* the ambient environment rather than replacing it, so an inherited `ATLASSIAN_BASE_URL` or `GH_TOKEN` from another identity prints exactly like one the profile set. Reading a single variable under `exec` is fine once `whoami` has told you the profile carries that service:
+
+```bash
+$MIEN exec <profile> -- printenv ATLASSIAN_BASE_URL
+```
+
+(Only for the non-secret ones — `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`. Never print a token-valued variable; see *Important rules*.)
 
 What each service contributes, when the profile configures it:
 
@@ -191,7 +199,7 @@ What each service contributes, when the profile configures it:
 | `oci` | `OCI_CLI_PROFILE`, `OCI_CLI_CONFIG_FILE` | |
 | `custom` | whatever names the user chose | `whoami` lists the names |
 
-Profiles differ, and the difference is the point — one may carry Atlassian + GitHub + Google, another add Slack and AWS, a personal one carry only Notion + GitHub + Google. Do not carry an assumption from one profile to the next; run the check above per profile. A variable that is *absent* is the dangerous case: `exec` overlays without scrubbing, so an ambient value from another identity survives and the call succeeds as the wrong person.
+Profiles differ, and the difference is the point — one may carry Atlassian + GitHub + Google, another add Slack and AWS, a personal one carry only Notion + GitHub + Google. Do not carry an assumption from one profile to the next; run `whoami` per profile. A service the profile does *not* carry is the dangerous case, and it is invisible from inside `exec`: the overlay never scrubs, so an ambient value from another identity survives, the variable looks set, and the call succeeds as the wrong person. Only the identity card can tell you the profile has nothing there.
 
 For Gmail/Calendar/Drive (no helper in v1). Google is the one service with no bare-token
 variable: `exec` exports `GOOGLE_APPLICATION_CREDENTIALS`, an ADC *file path*, which a
