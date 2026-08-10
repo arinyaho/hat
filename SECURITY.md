@@ -10,6 +10,10 @@ Everything here is stated against the code. If you find a claim the code does no
 
 *Not protected:* the credential stores those identities point at are shared. `AWS_PROFILE` selects among credentials in `~/.aws`; `CLOUDSDK_ACTIVE_CONFIG_NAME` selects a gcloud configuration whose credential store is global. Two sessions that run an interactive `gcloud auth login` at the same time will race.
 
+**Routing the environment-variable plane.** Activation sets environment variables, so anything that reads its credentials from the environment — `gh`, `aws`, `gcloud`, `oci`, `curl`, a client library — acts as the profile you named.
+
+*Not protected:* nothing outside that plane. An AI harness's own service connectors (Atlassian, Slack, Notion, Google) authenticate out of band to one fixed account and are unaffected by a profile switch — a session that "switched to `work`" still reads Jira as whatever account the connector holds, with no error. For any service a profile has credentials for, go through `mien exec <profile> -- ` and the service's REST API rather than a connector; the agent skill (`plugins/mien/skills/mien/SKILL.md`) states this as its first rule.
+
 **Keeping secret values out of your home directory.** GitHub tokens, Slack tokens, Atlassian and Notion tokens, Google refresh tokens, and AWS keys live in a secrets backend, not in a dotfile. What lands on disk locally is references and identifiers.
 
 *Not protected:* several services are *selected*, not replaced — see [What stays in your home directory](#what-stays-in-your-home-directory). And "not in your home directory" is not "not on disk": activation writes short-lived credential files under `$TMPDIR`, described below.

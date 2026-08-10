@@ -15,6 +15,18 @@ metadata:
 
 The user maintains multiple identities, each bundling a Google account (Gmail/Calendar/Drive + GCP) and optionally a GitHub account, one or more Slack workspaces, an Atlassian account (Jira/Confluence), a Notion integration token, AWS credentials, an OCI profile, and/or any credential of their own stored per identity (`custom`: one environment variable name, one secret — an LLM API key, an npm token, a database URL). Use `mien` to activate the right identity in this shell session.
 
+## Rule zero — if mien holds the credential, do not use a connector
+
+**A service the active profile has credentials for must be reached with `mien exec <profile> -- ` and a direct API call. Never through the harness's own connector/MCP integration for that service.**
+
+This is the mistake that costs the most time, and it is silent. `mien` changes one plane only: the environment variables of the shell it spawns (`gh`, `aws`, `gcloud`, `curl`). A harness connector — Atlassian/Jira/Confluence, Slack, Notion, Gmail, Drive — authenticates once, out of band, to a single account, and does not observe `mien` at all. Switching profiles has no effect on it.
+
+So a session that has "switched to `work-b`" still reads Jira as whatever single account the connector holds — usually `work-a`, or a personal account. Nothing errors. The tool returns real data for the wrong identity, which is precisely the failure this project exists to prevent.
+
+- Profile has the service (`mien whoami <profile>` lists it) → `mien exec <profile> -- ` + REST API. Always.
+- Profile does not have it → a connector is fine, and is the only option. Say out loud which account it is acting as, since `mien` is not the one choosing.
+- Never mix the two for one service inside a task. Data gathered through a connector cannot be attributed to the profile you named.
+
 ## When to use
 
 Trigger any time:
@@ -156,6 +168,31 @@ For a single service you can also inline the comparison, since a bare `gh api us
   && $MIEN run -- gh pr merge 123
 ```
 
+### Read the profile's environment before you write a single URL
+
+Site URLs, account emails and workspace names are **in the profile**. Guessing them wastes time and, worse, sometimes succeeds: an Atlassian site that exists but grants this account nothing authenticates cleanly and returns an empty result set, which reads exactly like "no data" rather than "wrong site".
+
+```bash
+$MIEN exec <profile> -- env | grep -E '^(ATLASSIAN|NOTION|GH_|GOOGLE_|AWS_|MIEN_SLACK)' | sed 's/=.*/=<set>/'
+```
+
+(`sed` because the values are secrets — see *Important rules*. Drop it only for the non-secret ones: `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`.) `$MIEN whoami <profile>` is the secret-free equivalent and is the safer first call.
+
+What each service contributes, when the profile configures it:
+
+| Service in the profile | Variables `exec` sets | Notes |
+|---|---|---|
+| `atlassian` | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` | base URL is the site — `https://<site>.atlassian.net`; never guess it |
+| `github` | `GH_TOKEN` (+ `GIT_SSH_COMMAND` when a key is stored) | |
+| `google` | `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_ACTIVE_CONFIG_NAME` | a **file path**, not a token |
+| `notion` | `NOTION_TOKEN` | |
+| `slack` | `MIEN_SLACK_TOKENS` (path to a 0600 JSON map) + `MIEN_SLACK_DEFAULT_TOKEN` when there is exactly one workspace | |
+| `aws` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`; `AWS_DEFAULT_REGION` | |
+| `oci` | `OCI_CLI_PROFILE`, `OCI_CLI_CONFIG_FILE` | |
+| `custom` | whatever names the user chose | `whoami` lists the names |
+
+Profiles differ, and the difference is the point — one may carry Atlassian + GitHub + Google, another add Slack and AWS, a personal one carry only Notion + GitHub + Google. Do not carry an assumption from one profile to the next; run the check above per profile. A variable that is *absent* is the dangerous case: `exec` overlays without scrubbing, so an ambient value from another identity survives and the call succeeds as the wrong person.
+
 For Gmail/Calendar/Drive (no helper in v1). Google is the one service with no bare-token
 variable: `exec` exports `GOOGLE_APPLICATION_CREDENTIALS`, an ADC *file path*, which a
 Google client library reads directly — prefer that. For a raw HTTP call, let the child
@@ -186,11 +223,28 @@ If the profile has only one workspace, `$MIEN_SLACK_DEFAULT_TOKEN` is also expor
 For Atlassian (Jira/Confluence):
 
 ```bash
-$MIEN exec work-foo -- sh -c 'curl -s -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
-  "$ATLASSIAN_BASE_URL/rest/api/3/issue/PROJ-123"'
+# Basic auth, and the credential never reaches argv: a shell builtin writes a
+# curl config to a pipe, curl reads it from stdin with -K -.
+$MIEN exec work-foo -- sh -c 'printf "user = \"%s:%s\"\n" "$ATLASSIAN_EMAIL" "$ATLASSIAN_API_TOKEN" \
+  | curl -sK - -H "Accept: application/json" \
+      --url "$ATLASSIAN_BASE_URL/rest/api/3/myself"'
 ```
 
-Atlassian Cloud is HTTP **Basic** (email:token), never Bearer. `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, and `ATLASSIAN_BASE_URL` all arrive from `mien exec` (and `mien use`).
+Atlassian Cloud is HTTP **Basic** (email:token), never Bearer. `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, and `ATLASSIAN_BASE_URL` all arrive from `mien exec` (and `mien use`). `printf` is a shell builtin, so no separate process carries the value in its argv; the `-u "$USER:$TOKEN"` form works too but leaves the token visible to `ps` on this machine for the life of the call. Use the `-K -` form in anything you write down. The same trick covers a Bearer header (`printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"`).
+
+**Send it to the right host.** These are *site* credentials: the base URL is `https://<site>.atlassian.net`, taken from `$ATLASSIAN_BASE_URL`, not guessed. `api.atlassian.com` is the OAuth 3LO gateway and will reject an API token no matter which profile you use.
+
+### What `mien token <service>` actually returns
+
+Not all three are OAuth. Assuming they are is a 401 that reads like a broken login:
+
+| Service | Shape | How it is sent | Lifetime |
+|---|---|---|---|
+| `atlassian` | Atlassian **API token** (`ATAT…`) | HTTP **Basic**, `email:token`, against `https://<site>.atlassian.net` | long-lived until revoked |
+| `notion` | Notion **integration token** (`ntn_…`) | `Authorization: Bearer`, against `https://api.notion.com` | long-lived until revoked |
+| `google` | **OAuth 2.0 access token**, minted on demand from the stored refresh token | `Authorization: Bearer`, against `*.googleapis.com` | ~1 hour |
+
+Only `google` is OAuth. Sending an Atlassian API token as a Bearer to `api.atlassian.com/oauth/token/accessible-resources` returns 401 for *every* profile — the credential is fine, the call is wrong.
 
 For Notion:
 
@@ -258,7 +312,9 @@ $MIEN exec work-foo -- oci iam user get --user-id <ocid>   # uses OCI_CLI_PROFIL
   - For Google, a pre-existing refresh token can be piped: `… --refresh-token-stdin < tokenfile` with the client secret via `--secret-cmd`.
 - **Don't switch the active profile in this shell** if the user is asking for a one-off in another identity — use `mien exec <other> -- <cmd>` so the parent shell stays clean.
 - **A refused `exec` is not a broken command.** Under an agent harness, `mien exec <p> -- …` refuses when this place visibly belongs to a *different* profile — an approved `.mien` declaration, else the repository's `origin` owner or a `default_for` scope. Nothing runs and no credential is loaded, and the error names the profile that does claim the place: re-run as that profile, or stop and ask the user if you believe the profile you named is the right one. Treat the refusal as the answer — do not go looking for a phrasing that gets past it. It is a mistake-catcher, not a security boundary, so it is not hard to evade; evading it is how you end up acting as the wrong person, which is the whole thing it exists to stop. (A person at a terminal never triggers this check.)
-- **Don't use the agent's native Google/Slack/Atlassian/Notion connectors** when `mien` is configured — they are single-account and bypass the user's vault.
+- **Don't use the agent's native Google/Slack/Atlassian/Notion connectors** for a service the profile has credentials for — they are single-account, bypass the user's vault, and do not react to a profile switch. See *Rule zero* at the top; this is the failure that looks like success.
+- **Don't guess a site URL, workspace or account email.** It is in the profile's environment — see *Read the profile's environment before you write a single URL*. A wrong-but-real endpoint authenticates fine and returns nothing, which is indistinguishable from an honest empty result.
+- **Don't assume a credential is OAuth.** Only `google` is; `atlassian` and `notion` are long-lived API tokens with their own auth scheme. See the table above before debugging a 401 as a broken login.
 
 ## References
 

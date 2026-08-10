@@ -49,6 +49,8 @@ cd ~/projects/mien && uv tool install --editable .
 
 `mien` ships a SKILL.md that teaches AI agents (Claude Code, Codex, Hermes Agent) when and how to invoke the CLI on your behalf. The skill assumes the `mien` binary is already on `PATH` — install the CLI first (above), then add the skill:
 
+> **One rule worth knowing yourself:** `mien` routes the environment-variable plane only. Your agent's built-in service connectors (Atlassian, Slack, Notion, Google) hold one fixed account each and ignore a profile switch entirely — so a session told to use `work` still reads Jira as whoever the connector authenticated as, silently. For any service a profile has credentials for, the agent should call the REST API under `mien exec <profile> -- `. The skill says so as its first rule; see [SECURITY.md](SECURITY.md#protection-goals-and-what-is-not-protected).
+
 **Claude Code:**
 
 ```bash
