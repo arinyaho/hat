@@ -191,7 +191,7 @@ What each service contributes, when the profile configures it:
 | Service in the profile | Variables `exec` sets | Notes |
 |---|---|---|
 | `atlassian` | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` | base URL is the site — `https://<site>.atlassian.net`; never guess it |
-| `github` | `GH_TOKEN` (+ `GIT_SSH_COMMAND` when a key is stored) | |
+| `github` | `GH_TOKEN` when a token is stored; `GIT_SSH_COMMAND` when an SSH key is configured (stored key or `ssh_key_path`) | an SSH-only `github` identity sets no `GH_TOKEN` at all, so `gh` keeps running on whatever ambient token the overlay left in place |
 | `google` | `CLOUDSDK_ACTIVE_CONFIG_NAME`; `CLOUDSDK_CORE_PROJECT` when a default project is set; `GOOGLE_APPLICATION_CREDENTIALS` when OAuth credentials are stored | the credentials variable is a **file path**, not a token; a gcloud-only Google identity sets only the `CLOUDSDK_` pair |
 | `notion` | `NOTION_TOKEN` | |
 | `slack` | `MIEN_SLACK_TOKENS` (path to a 0600 JSON map) + `MIEN_SLACK_DEFAULT_TOKEN` when there is exactly one workspace | |
