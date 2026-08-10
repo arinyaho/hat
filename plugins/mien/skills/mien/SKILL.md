@@ -184,7 +184,7 @@ Do not use an `env` dump for that question. `exec` merges the profile's variable
 $MIEN exec <profile> -- printenv ATLASSIAN_BASE_URL
 ```
 
-(Only for the non-secret ones — `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`. Never print a token-valued variable; see *Important rules*.)
+(Only for the non-secret ones — `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `AWS_PROFILE`, `AWS_DEFAULT_REGION`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, `CLOUDSDK_CORE_PROJECT`, `OCI_CLI_PROFILE`, `OCI_CLI_CONFIG_FILE`. Never print a token-valued variable, and never a custom one — a custom variable's value is always a secret; see *Important rules*.)
 
 What each service contributes, when the profile configures it:
 
@@ -192,7 +192,7 @@ What each service contributes, when the profile configures it:
 |---|---|---|
 | `atlassian` | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` | base URL is the site — `https://<site>.atlassian.net`; never guess it |
 | `github` | `GH_TOKEN` (+ `GIT_SSH_COMMAND` when a key is stored) | |
-| `google` | `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_ACTIVE_CONFIG_NAME` | a **file path**, not a token |
+| `google` | `CLOUDSDK_ACTIVE_CONFIG_NAME`; `CLOUDSDK_CORE_PROJECT` when a default project is set; `GOOGLE_APPLICATION_CREDENTIALS` when OAuth credentials are stored | the credentials variable is a **file path**, not a token; a gcloud-only Google identity sets only the `CLOUDSDK_` pair |
 | `notion` | `NOTION_TOKEN` | |
 | `slack` | `MIEN_SLACK_TOKENS` (path to a 0600 JSON map) + `MIEN_SLACK_DEFAULT_TOKEN` when there is exactly one workspace | |
 | `aws` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`; `AWS_DEFAULT_REGION` | |
