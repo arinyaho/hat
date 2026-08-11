@@ -3,7 +3,8 @@ import pytest
 from mien.config import AtlassianService, GitHubService, GoogleService, Profile
 from mien.resolve import (AmbiguousScope, claimed_profile, expand_scope,
                           match_base, normalize_remote, profile_for_email,
-                          resolve_profile, resolve_remote_profile)
+                          remote_embeds_credential, resolve_profile,
+                          resolve_remote_profile)
 
 
 def _gp(name, *, google=None, atlassian=None, github=None):
@@ -405,3 +406,33 @@ class TestResolveProfile:
         nothing to disambiguate."""
         p = profiles(prof("work", "*/Projects", "*/Projects/acme"))
         assert resolve_profile(p, "/Users/me/Projects/acme") == "work"
+
+
+class TestRemoteEmbedsCredential:
+    """A token in a remote URL is an identity mien cannot route: git acts as its
+    owner whatever profile is active, and printing the remote leaks the secret."""
+
+    def test_flags_a_token_in_the_userinfo(self):
+        assert remote_embeds_credential(
+            "https://x-access-token:TOKEN@github.com/acme/repo.git"
+        )
+        assert remote_embeds_credential("https://user:TOKEN@github.com/acme/repo")
+        assert remote_embeds_credential("HTTP://user:TOKEN@example.com/r")
+
+    def test_ignores_forms_that_carry_no_secret(self):
+        """A false positive would train people to ignore the warning, so the
+        check demands a password component — a bare `user@` is a username git
+        prompts against, and ssh userinfo is just `git`."""
+        assert not remote_embeds_credential("https://github.com/acme/repo.git")
+        assert not remote_embeds_credential("https://arinyaho@github.com/acme/repo")
+        assert not remote_embeds_credential("git@github.com:acme/repo.git")
+        assert not remote_embeds_credential("ssh://git@github.com/acme/repo.git")
+        assert not remote_embeds_credential(None)
+        assert not remote_embeds_credential("")
+
+    def test_a_flagged_remote_still_normalizes_without_the_secret(self):
+        """The matching path must never carry the token into a message: an
+        AmbiguousScope error or a log line prints the normalized form."""
+        norm = normalize_remote("https://x-access-token:TOKEN@github.com/acme/repo.git")
+        assert norm == "github.com/acme/repo"
+        assert "TOKEN" not in norm

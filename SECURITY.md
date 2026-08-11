@@ -14,6 +14,10 @@ Everything here is stated against the code. If you find a claim the code does no
 
 *Not protected:* nothing outside that plane. An AI harness's own service connectors (Atlassian, Slack, Notion, Google) authenticate out of band to one fixed account and are unaffected by a profile switch — a session that "switched to `work`" still reads Jira as whatever account the connector holds, with no error. For any service a profile has credentials for, go through `mien exec <profile> -- ` and the service's REST API rather than a connector; the agent skill (`plugins/mien/skills/mien/SKILL.md`) states this as its first rule.
 
+**Noticing a credential git stores in cleartext.** A remote URL of the form `https://<user>:<token>@host/…` puts a working token in `.git/config`, where git authenticates as its owner regardless of the active profile and any command that prints a remote — `git remote -v`, `git config --list`, a failed push — copies it into a terminal, a CI log, or an AI session transcript. `mien statusline` shows this ahead of every other identity state, and `mien doctor` names the affected remotes and prints the command to strip them. Both report remote *names* only; the URL is the secret.
+
+*Not protected:* detection is not removal. `mien` never rewrites your remotes, and it only looks at the repository you are standing in — it does not walk the machine. A token already embedded has to be assumed captured and revoked at the provider; stripping the URL afterwards stops the next copy, not the ones already written.
+
 **Keeping secret values out of your home directory.** GitHub tokens, Slack tokens, Atlassian and Notion tokens, Google refresh tokens, and AWS keys live in a secrets backend, not in a dotfile. What lands on disk locally is references and identifiers.
 
 *Not protected:* several services are *selected*, not replaced — see [What stays in your home directory](#what-stays-in-your-home-directory). And "not in your home directory" is not "not on disk": activation writes short-lived credential files under `$TMPDIR`, described below.

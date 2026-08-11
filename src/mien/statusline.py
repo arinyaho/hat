@@ -28,6 +28,7 @@ def render_segment(
     ambiguous: bool = False,
     env_unknown: bool = False,
     pending: str | None = None,
+    remote_credential: bool = False,
 ) -> str:
     """Format the mien identity segment.
 
@@ -45,6 +46,9 @@ def render_segment(
       specificity (resolution would refuse to guess).
     - ``env_unknown``: ``MIEN_PROFILE`` names a profile that is not in the
       config (renamed or deleted, leaving a stale export in an open shell).
+    - ``remote_credential``: the repository's `origin` embeds a token in its URL
+      (`remote_embeds_credential`), so git acts as that token's owner whatever
+      mien says — and every command that prints the remote leaks the secret.
 
     The alarm cases come first: a wrong or unknown active identity is the failure
     this segment exists to surface, so it must win over the calm cases.
@@ -52,6 +56,12 @@ def render_segment(
     def why(claimed: str) -> str:
         return f"repo is {claimed}'s" if source == "repo" else f"dir wants {claimed}"
 
+    # A token sitting in the remote URL outranks every other alarm: it is a
+    # certainty rather than a comparison, it overrides whatever mien routed, and
+    # it is leaking on every command that prints the remote. Naming the profile
+    # would only dilute it — the credential is the finding.
+    if remote_credential:
+        return f"{_RED}🔴 mien ✗ origin embeds a token — run 'mien doctor'{_RESET}"
     # A project-local `.mien` declaration is present but not yet approved — it
     # names an identity but does not act until `mien allow`.
     if pending and not env_profile:

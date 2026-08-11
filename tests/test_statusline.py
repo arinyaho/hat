@@ -693,3 +693,25 @@ def test_statusline_remote_owner_beats_a_directory_scope(tmp_path, monkeypatch):
                   remote="https://github.com/acme-core/api.git")
     assert result.exit_code == 0
     assert "🟢" in result.output and "mien:work" in result.output
+
+
+def test_statusline_flags_a_token_in_the_remote(tmp_path, monkeypatch):
+    """A credential in the remote URL outranks every other signal: git acts as
+    that token's owner whatever mien routed, and the segment must not echo it."""
+    _write_cfg(tmp_path, monkeypatch, work=["*/acme/*"], personal=["*/me/*"])
+    result = _run("/w/acme/repo", monkeypatch, mien_profile="work",
+                  remote="https://x-access-token:SECRETVALUE@github.com/acme/repo.git")
+    assert result.exit_code == 0
+    assert "🔴" in result.output
+    assert "origin embeds a token" in result.output
+    assert "SECRETVALUE" not in result.output
+    # the profile agreeing with the directory must not turn this green
+    assert "🟢" not in result.output
+
+
+def test_statusline_stays_green_on_an_ordinary_remote(tmp_path, monkeypatch):
+    _write_cfg(tmp_path, monkeypatch, work=["*/acme/*"], personal=["*/me/*"])
+    result = _run("/w/acme/repo", monkeypatch, mien_profile="work",
+                  remote="https://github.com/acme/repo.git")
+    assert result.exit_code == 0
+    assert "🟢" in result.output and "mien:work" in result.output
