@@ -189,6 +189,25 @@ def normalize_remote(url: str) -> str:
     return s.rstrip("/").lower()
 
 
+def remote_embeds_credential(url: str | None) -> bool:
+    """True if ``url`` carries a secret in its userinfo — `https://user:token@host`.
+
+    This is an identity mien does not route and cannot see: git authenticates as
+    whoever that token belongs to, no matter which profile is active, and every
+    command that prints a remote (`git remote -v`, `git config --list`, a push
+    error) writes the secret into a terminal, a CI log, or an agent transcript.
+
+    Only a *password* component counts. `https://user@host` names a user and
+    prompts for the rest; `git@host:path` and `ssh://git@host/path` are ordinary
+    ssh. Requiring the `:` keeps the check exact — a false positive here would
+    train people to ignore it.
+    """
+    if not url:
+        return False
+    m = re.match(r"^https?://([^/]+)@", url.strip(), re.IGNORECASE)
+    return bool(m and ":" in m.group(1))
+
+
 def resolve_remote_profile(profiles: dict[str, Profile], remote: str) -> str | None:
     """Return the profile whose ``owns_remotes`` claims ``remote``, or None.
 

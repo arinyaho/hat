@@ -51,7 +51,8 @@ from mien.discover import discover_all, render_report
 from mien.project import (ensure_gitignored, find_declaration, is_allowed,
                           record_allow, write_declaration)
 from mien.resolve import (AmbiguousScope, claimed_profile, git_author_email,
-                          git_origin_remote, profile_for_email, resolve_profile)
+                          git_origin_remote, profile_for_email,
+                          remote_embeds_credential, resolve_profile)
 from mien.verify import Status, probe_aws, probe_github, probe_google, run_probe_safely
 from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN, render_name
 from mien.shell import (CAPTURE_MARKER_VARS, custom_vars, emit_unset, emit_use,
@@ -1666,6 +1667,12 @@ def _identity_segment(cfg: Config, cwd: str) -> str:
     """
     env_profile = os.environ.get("MIEN_PROFILE") or None
     env_unknown = bool(env_profile and env_profile not in cfg.profiles)
+    # Before any of the identity comparisons: a token embedded in the remote URL
+    # decides who git acts as regardless of what mien routed, and leaks itself
+    # into every log that prints the remote. Nothing below can outrank that.
+    origin = git_origin_remote(cwd)
+    if remote_embeds_credential(origin):
+        return render_segment(None, None, remote_credential=True)
     # A project-local `.mien` declaration, if present. Approved → it is the claim
     # (it outranks central scopes, as in resolution); present-but-unapproved →
     # surfaced as pending so the segment invites `mien allow` rather than acting.
@@ -1679,9 +1686,7 @@ def _identity_segment(cfg: Config, cwd: str) -> str:
         claimed, source = declared, "dir"
     else:
         try:
-            claimed, source = claimed_profile(
-                cfg.profiles, cwd, remote=git_origin_remote(cwd)
-            )
+            claimed, source = claimed_profile(cfg.profiles, cwd, remote=origin)
         except AmbiguousScope:
             ambiguous = True
     author_email = git_author_email(cwd)
@@ -2054,6 +2059,60 @@ def logout_cmd(profile_name: str, service: str, custom_name: str | None,
     click.echo(f"removed {service} from {profile_name}")
 
 
+def _check_remote_credentials(cwd: str) -> None:
+    """Report any remote of the repository at ``cwd`` that embeds a token.
+
+    A credential in a remote URL is the one identity mien cannot route around:
+    git authenticates as that token's owner whatever profile is active, and the
+    secret is written in cleartext into `.git/config`, so `git remote -v`, a
+    push error, or an agent listing repositories copies it into a log or a
+    transcript. Stripping the userinfo is the whole fix — a credential helper
+    then supplies the secret per call instead of storing it in the tree.
+
+    Prints the remote *names* and never a URL, since the URL is the secret.
+
+    ponytail: checks the repository you are standing in, not the machine. A
+    walker belongs with `mien discover`, which already traverses repositories.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "remote"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode != 0:
+            return  # not a repository, or no git — nothing to report.
+        names = [n for n in result.stdout.split() if n]
+        bad = [
+            n for n in names
+            if remote_embeds_credential(
+                subprocess.run(
+                    ["git", "-C", cwd, "remote", "get-url", n],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip()
+            )
+        ]
+    except (OSError, subprocess.SubprocessError):
+        return
+    if not bad:
+        return
+    click.echo(
+        f"remotes:   ⚠ {len(bad)} remote(s) here embed a credential in the URL: "
+        f"{', '.join(bad)}\n"
+        "             git acts as that token's owner whatever profile is active, "
+        "and every command that prints a remote leaks it.\n"
+        "             Strip it, then let a credential helper supply the secret:\n"
+        + "".join(
+            f"               git remote set-url {n} "
+            f"$(git remote get-url {n} | sed -E 's#//[^@/]+@#//#')\n"
+            for n in bad
+        )
+        + "               git config --global credential.helper "
+        + ("osxkeychain" if sys.platform == "darwin" else "store --file ~/.git-credentials")
+        + "\n             The embedded token stays valid until you revoke it — "
+        "assume it is in a log and rotate it."
+    )
+
+
 @main.command("doctor")
 @click.option("--gc", is_flag=True, help="Sweep stale ephemeral files for dead PIDs")
 def doctor_cmd(gc: bool) -> None:
@@ -2076,6 +2135,8 @@ def doctor_cmd(gc: bool) -> None:
 
     if cfg.secrets_backend.type == "gcp_secret_manager":
         _check_adc_quota_project(cfg.secrets_backend.options.get("project"))
+
+    _check_remote_credentials(_logical_cwd())
 
     if gc:
         EphemeralStore.gc()
