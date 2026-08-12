@@ -119,6 +119,8 @@ class TestNormalizeRemote:
             ("https://user:ghp_faketoken0000@gith℀ub.com/acme/x.git", "gith℀ub.com"),
             # `]` with no `[` — "Invalid IPv6 URL"
             ("https://user:fake]pass@github.com/acme/x.git", "github.com"),
+            # same, with a second `@`: the split must be at the *last* one
+            ("https://user:fake]pass@rest@github.com/acme/x.git", "github.com"),
         ):
             norm = normalize_remote(url)
             assert norm == f"{host}/acme/x"
