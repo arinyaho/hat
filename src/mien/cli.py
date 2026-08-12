@@ -1601,28 +1601,39 @@ def discover_cmd(scan_roots: tuple[str, ...], own: str | None,
     # Only an owner the scan actually found may be claimed, so the glob written is
     # known to match a repository on this machine rather than a typo that matches
     # nothing (or, worse, more than intended).
-    sample = next((f.detail for f in remotes
-                    if f.provider == "remote" and f.identifier == owner), None)
-    if sample is None:
-        known = ", ".join(f.identifier for f in remotes if f.provider == "remote") or "none"
+    samples = [f.detail for f in remotes
+               if f.provider == "remote" and f.identifier == owner]
+    if not samples:
+        known = ", ".join(sorted({f.identifier for f in remotes
+                                  if f.provider == "remote"})) or "none"
         raise click.ClickException(
             f"no repository under the scanned roots has remote owner {owner!r}. "
             f"Owners found: {known}. Point the scan with --scan-root if the "
             f"repositories live elsewhere.")
 
+    # Every repository of the owner, not one sample: a profile can own some of
+    # them and none of the rest, and that partial case is exactly the one a
+    # claim is *for*. Refuse only when there is nothing left to claim.
     try:
-        existing = resolve_remote_profile(cfg.profiles, sample)
+        claims = {s: resolve_remote_profile(cfg.profiles, s) for s in samples}
     except AmbiguousScope as exc:
         raise click.ClickException(str(exc)) from exc
-    if existing == profile_name:
+    unclaimed = [s for s, c in claims.items() if c is None]
+    existing = sorted({c for c in claims.values() if c})
+    if not unclaimed:
+        if existing == [profile_name]:
+            raise click.ClickException(
+                f"{profile_name} already owns every repository of {owner} "
+                f"(owns_remotes: "
+                f"{', '.join(cfg.profiles[profile_name].owns_remotes)}).")
         raise click.ClickException(
-            f"{profile_name} already owns {owner} (owns_remotes: "
-            f"{', '.join(cfg.profiles[profile_name].owns_remotes)}).")
-    if existing:
-        raise click.ClickException(
-            f"{owner} is already owned by {existing!r}. Two profiles claiming one "
+            f"every repository of {owner} is already owned by "
+            f"{', '.join(repr(e) for e in existing)}. Two profiles claiming one "
             f"owner is how identity gets misrouted — edit owns_remotes in "
             f"{config_path()} if this repository really moved.")
+    # The claim is verified against a repository nothing owned before, so the
+    # check proves the new glob did the work rather than an older, narrower one.
+    sample = unclaimed[0]
 
     glob = owner_glob(owner)
     cfg.profiles[profile_name].owns_remotes.append(glob)

@@ -116,18 +116,24 @@ def _git_repos(root: Path, depth: int) -> list[Path]:
     `.git` and its `worktrees/` bookkeeping. Symlinked directories are not
     followed, so a link cannot walk the scan out of the tree it was pointed at.
     Descent stops at a repository: everything below one is that same repository.
+
+    An inventory skips what it cannot read: one directory with no permissions
+    must not abort the whole walk, so every stat and listing here is guarded.
     """
-    if (root / ".git").exists():
-        return [root]
-    if depth <= 0:
-        return []
     try:
+        if (root / ".git").exists():
+            return [root]
+        if depth <= 0:
+            return []
         entries = sorted(root.iterdir())
     except OSError:
         return []
     repos: list[Path] = []
     for entry in entries:
-        if entry.name.startswith(".") or entry.is_symlink() or not entry.is_dir():
+        try:
+            if entry.name.startswith(".") or entry.is_symlink() or not entry.is_dir():
+                continue
+        except OSError:
             continue
         repos.extend(_git_repos(entry, depth - 1))
     return repos
@@ -138,16 +144,20 @@ def discover_remotes(
 ) -> list[Found]:
     """The git remote owners of the repositories on this machine.
 
-    One `Found` per `host/owner`, with a sample repository remote as its detail —
-    the sample is what a claim is verified against, so a glob offered here is
-    known to match a real repository rather than assumed to.
+    One `Found` per repository remote, grouped under its `host/owner` identifier
+    with the normalized remote as its detail. Every remote is reported, not one
+    sample per owner, because "is this owner covered" is a question about all of
+    them: a profile can own some of an owner's repositories and none of the
+    rest, and one arbitrary sample cannot tell that apart from full coverage.
+    Each remote is also what a claim is verified against, so a glob offered here
+    is known to match a real repository rather than assumed to.
 
     Owners come from the same `normalize_remote` form `owns_remotes` is matched
     in, so what is reported and what is written mean one thing. A remote with no
     owner segment (`host/repo`, some self-hosted setups) is skipped rather than
     reported as owning a whole host.
     """
-    owners: dict[str, str] = {}
+    owners: dict[str, list[str]] = {}
     leaks: list[Found] = []
     for root in roots or [Path(os.environ.get("HOME", str(Path.home())))]:
         for repo in _git_repos(Path(root), depth):
@@ -169,8 +179,11 @@ def discover_remotes(
             parts = norm.split("/")
             if len(parts) < 3:
                 continue
-            owners.setdefault("/".join(parts[:2]), norm)
-    return ([Found("remote", owner, sample) for owner, sample in sorted(owners.items())]
+            remotes = owners.setdefault("/".join(parts[:2]), [])
+            if norm not in remotes:  # two clones of one repository are one remote
+                remotes.append(norm)
+    return ([Found("remote", owner, norm)
+             for owner in sorted(owners) for norm in sorted(owners[owner])]
             + sorted(leaks, key=lambda f: f.identifier))
 
 
@@ -266,19 +279,35 @@ def render_report(found: list[Found], profiles: dict[str, Profile]) -> str:
             lines.append("      Run `mien doctor` in each for the full check "
                          "(push URLs and rewrite rules too) and how to strip it.")
             continue
+        # Coverage is decided by resolving every one of an owner's repositories,
+        # not by comparing strings and not by sampling one: whatever
+        # `resolve_remote_profile` answers is what the status line, guard and
+        # exec will answer here — and it can answer differently per repository,
+        # which is a third state (partly owned) the report has to show rather
+        # than round to "owned".
+        if provider == "remote":
+            groups: dict[str, list[str]] = {}
+            for item in items:
+                groups.setdefault(item.identifier, []).append(item.detail)
+            for owner, remotes in groups.items():
+                claims = [_remote_claimed_by(profiles, r) for r in remotes]
+                owned = sorted({c for c in claims if c})
+                unowned = [r for r, c in zip(remotes, claims) if c is None]
+                hint = _import_hint(Found("remote", owner))
+                if not unowned:
+                    lines.append(f"  ✓ {owner} — owned by {', '.join(owned)}")
+                elif owned:
+                    lines.append(
+                        f"  ~ {owner} — partly owned by {', '.join(owned)}; "
+                        f"{len(unowned)} of {len(remotes)} repositories "
+                        f"({unowned[0]}) owned by no profile")
+                    lines.append(f"      {hint}")
+                else:
+                    lines.append(f"  · {owner} ({remotes[0]}) — no profile owns it")
+                    lines.append(f"      {hint}")
+            continue
         for item in items:
             detail = f" ({item.detail})" if item.detail else ""
-            if provider == "remote":
-                # Coverage is decided by resolving the sample remote, not by
-                # comparing strings: whatever `resolve_remote_profile` answers is
-                # what the status line, guard and exec will answer here.
-                claimed = _remote_claimed_by(profiles, item.detail)
-                if claimed:
-                    lines.append(f"  ✓ {item.identifier} — owned by {claimed}")
-                else:
-                    lines.append(f"  · {item.identifier}{detail} — no profile owns it")
-                    lines.append(f"      {_import_hint(item)}")
-                continue
             if item.identifier in bound:
                 lines.append(f"  ✓ {item.identifier}{detail} — in a mien profile")
             else:

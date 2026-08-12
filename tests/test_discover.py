@@ -1,5 +1,8 @@
+import os
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from mien.config import AWSService, GitHubService, GoogleService, OCIService, Profile
 from mien.discover import (Found, discover_aws, discover_gcloud, discover_github,
@@ -97,8 +100,12 @@ def test_discover_remotes_groups_by_owner_and_stays_in_the_tree(tmp_path):
     (home / "Projects" / "link").symlink_to(outside)
 
     found = discover_remotes([home], origin=urls.get)
-    assert [(f.provider, f.identifier) for f in found] == [
-        ("remote", "github.com/acme-inc"), ("remote", "github.com/me")]
+    # Every repository is reported, grouped under its owner: coverage is a
+    # question about all of an owner's repositories, not about one sample.
+    assert [(f.provider, f.identifier, f.detail) for f in found] == [
+        ("remote", "github.com/acme-inc", "github.com/acme-inc/api"),
+        ("remote", "github.com/acme-inc", "github.com/acme-inc/web"),
+        ("remote", "github.com/me", "github.com/me/blog")]
     # The detail is a real remote of that owner — what a claim is verified against.
     assert found[0].detail.startswith("github.com/acme-inc/")
 
@@ -120,6 +127,46 @@ def test_render_report_marks_owned_remotes_and_offers_the_rest():
     assert "✓ github.com/acme-inc — owned by work" in report
     assert "· github.com/me (github.com/me/blog) — no profile owns it" in report
     assert "mien discover --own github.com/me --profile <profile>" in report
+
+
+def test_render_report_distinguishes_full_from_partial_coverage():
+    """An owner one of whose repositories no profile resolves is not "owned":
+    saying so would promise coverage `mien exec`/`guard` do not give, and would
+    leave the uncovered repositories with no command to claim them."""
+    found = [Found("remote", "github.com/me", "github.com/me/blog"),
+             Found("remote", "github.com/me", "github.com/me/other"),
+             Found("remote", "github.com/acme", "github.com/acme/api"),
+             Found("remote", "github.com/acme", "github.com/acme/web")]
+    profiles = {"work": Profile(name="work",
+                                owns_remotes=["github.com/me/blog",
+                                              "github.com/acme/*"])}
+    report = render_report(found, profiles)
+    # Every repository resolves → owned, and no claim is offered.
+    assert "✓ github.com/acme — owned by work" in report
+    # One of two does not → partly owned, with the claim that would finish it.
+    assert ("~ github.com/me — partly owned by work; 1 of 2 repositories "
+            "(github.com/me/other) owned by no profile") in report
+    assert "mien discover --own github.com/me --profile <profile>" in report
+    assert "✓ github.com/me" not in report
+
+
+def test_git_repos_skips_an_unreadable_directory(tmp_path):
+    """One directory with no permissions must not abort the whole inventory."""
+    import stat
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads everything, so nothing is denied")
+    home = tmp_path / "home"
+    urls = dict([_repo(home, "Projects/api", "https://github.com/acme/api")])
+    # Sorts before the readable repository, so a crash here would hide it too.
+    denied = home / "Projects" / "aaa-denied"
+    (denied / ".git").mkdir(parents=True)
+    os.chmod(denied, 0o000)
+    try:
+        assert [f.identifier for f in discover_remotes([home], origin=urls.get)] == [
+            "github.com/acme"]
+    finally:
+        os.chmod(denied, stat.S_IRWXU)
 
 
 def test_owner_glob_claims_the_owner():

@@ -2974,6 +2974,40 @@ def test_discover_own_refuses_to_claim_another_profiles_owner(
     assert load_config().profiles["personal"].owns_remotes == []
 
 
+def test_discover_own_finishes_a_partly_owned_owner(runner, tmp_path, monkeypatch):
+    """Owning one repository of an owner must not dead-end the rest: the report
+    calls that partly owned, and the claim widens it to the whole owner."""
+    from mien.config import load_config
+    from mien.resolve import resolve_remote_profile
+
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/me/blog"])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+    monkeypatch.setattr("mien.cli.discover_all", lambda: [])
+
+    report = runner.invoke(main, ["discover", "--scan-root", str(home)])
+    assert "~ github.com/me — partly owned by work" in report.output
+    assert "✓ github.com/me" not in report.output
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "work"])
+    assert result.exit_code == 0, result.output
+    profiles = load_config().profiles
+    assert profiles["work"].owns_remotes == ["github.com/me/blog", "github.com/me/*"]
+    assert resolve_remote_profile(profiles, "github.com/me/other") == "work"
+    assert resolve_remote_profile(profiles, "github.com/me/blog") == "work"
+
+    # Now every repository of the owner resolves — the report says so, and a
+    # second claim has nothing left to add.
+    report = runner.invoke(main, ["discover", "--scan-root", str(home)])
+    assert "✓ github.com/me — owned by work" in report.output
+    again = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                 "--own", "github.com/me", "--profile", "work"])
+    assert again.exit_code != 0
+    assert "already owns every repository of github.com/me" in again.output
+
+
 def test_discover_own_needs_a_profile(runner, tmp_path, monkeypatch):
     _remote_cfg(tmp_path, monkeypatch, work=[])
     result = runner.invoke(main, ["discover", "--scan-root", str(tmp_path),

@@ -100,6 +100,8 @@ mien login personal --service custom --name ANTHROPIC_API_KEY   # a credential o
 ```
 Git remote owners:
   ✓ github.com/acme-inc — owned by work
+  ~ github.com/labs — partly owned by work; 2 of 5 repositories (github.com/labs/toy) owned by no profile
+      mien discover --own github.com/labs --profile <profile>
   · github.com/me (github.com/me/blog) — no profile owns it
       mien discover --own github.com/me --profile <profile>
 GitHub accounts:
