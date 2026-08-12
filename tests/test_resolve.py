@@ -110,6 +110,21 @@ class TestNormalizeRemote:
         assert normalize_remote("https://[::1]/acme/x.git") == "::1/acme/x"
         assert normalize_remote("https://[::1]:8443/acme/x") == "::1/acme/x"
 
+    def test_a_netloc_urlsplit_itself_rejects_is_handled_and_not_raised(self):
+        """`urlsplit` raises *before* `.port` on two shapes, and the NFKC message
+        quotes the netloc — i.e. the token. A raise would abort `mien discover`'s
+        whole sweep and print the credential in the traceback."""
+        for url, host in (
+            # netloc not NFKC-stable
+            ("https://user:ghp_faketoken0000@gith℀ub.com/acme/x.git", "gith℀ub.com"),
+            # `]` with no `[` — "Invalid IPv6 URL"
+            ("https://user:fake]pass@github.com/acme/x.git", "github.com"),
+        ):
+            norm = normalize_remote(url)
+            assert norm == f"{host}/acme/x"
+            assert "@" not in norm and "user" not in norm and "fake" not in norm
+            assert remote_embeds_credential(url)
+
     def test_a_local_path_is_left_as_a_lowercased_string(self):
         # No host; simply must not crash and must not spuriously match a glob.
         assert normalize_remote("/srv/git/Repo") == "/srv/git/repo"

@@ -175,11 +175,20 @@ def _authority(url: str) -> tuple[str, str, str] | None:
     literal is a host and not a syntax error, and a port is a port. An `@` after
     the authority stays in the path.
 
-    None means the authority is not parseable — in practice a password with an
-    unencoded `/`, which truncates the netloc at that slash and leaves a port
-    that is not a number, so `.port` raises. Callers treat that as "strip
-    everything up to the last `@`", since a fragment of a credential must never
-    surface as a host.
+    None means the authority is not parseable. Three shapes reach it, and all
+    three arrive as a `ValueError` the guard below has to catch — a raise that
+    escapes here would abort `mien discover`'s whole sweep, and the NFKC message
+    quotes the netloc, i.e. the credential:
+
+    - a password with an unencoded `/`, which truncates the netloc at that slash
+      and leaves a port that is not a number, so `.port` raises;
+    - a netloc that is not NFKC-stable (`urlsplit`'s `_checknetloc`);
+    - a `]` in the netloc with no `[` — e.g. a password containing `]` —
+      which `urlsplit` rejects as an invalid IPv6 URL.
+
+    The last two raise inside `urlsplit` itself, so the call is inside the
+    `try`. Callers treat None as "strip everything up to the last `@`", since a
+    fragment of a credential must never surface as a host.
 
     ponytail: a password with an unencoded `/` and no `:`
     (`https://user/pass@host/a/x`) parses as a valid authority `user` with an
@@ -187,8 +196,8 @@ def _authority(url: str) -> tuple[str, str, str] | None:
     It is neither stripped nor flagged. Percent-encode the password; there is no
     syntactic fix short of asking the remote.
     """
-    u = urlsplit(url)
     try:
+        u = urlsplit(url)
         u.port
     except ValueError:
         return None
