@@ -2074,6 +2074,12 @@ def _check_remote_credentials(cwd: str) -> None:
     ponytail: checks the repository you are standing in, not the machine. A
     walker belongs with `mien discover`, which already traverses repositories.
     """
+    def git(*args: str) -> str:
+        r = subprocess.run(
+            ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=2,
+        )
+        return r.stdout if r.returncode == 0 else ""
+
     try:
         result = subprocess.run(
             ["git", "-C", cwd, "remote"],
@@ -2082,29 +2088,43 @@ def _check_remote_credentials(cwd: str) -> None:
         if result.returncode != 0:
             return  # not a repository, or no git — nothing to report.
         names = [n for n in result.stdout.split() if n]
-        bad = [
-            n for n in names
-            if remote_embeds_credential(
-                subprocess.run(
-                    ["git", "-C", cwd, "remote", "get-url", n],
-                    capture_output=True, text=True, timeout=2,
-                ).stdout.strip()
+        # A push URL is a separate credential: `git remote get-url <n>` shows the
+        # fetch URL only, so a token in `remote.<n>.pushurl` is invisible there —
+        # while `git remote -v` and every push still carry it. Read the config key
+        # rather than `get-url --push`, which falls back to the fetch URL when no
+        # push URL is set and would mislabel which one is dirty.
+        bad: list[tuple[str, bool, bool]] = []
+        for n in names:
+            fetch = remote_embeds_credential(git("remote", "get-url", n).strip())
+            push = any(
+                remote_embeds_credential(u)
+                for u in git("config", "--get-all", f"remote.{n}.pushurl").split()
             )
-        ]
+            if fetch or push:
+                bad.append((n, fetch, push))
     except (OSError, subprocess.SubprocessError):
         return
     if not bad:
         return
     click.echo(
         f"remotes:   ⚠ {len(bad)} remote(s) here embed a credential in the URL: "
-        f"{', '.join(bad)}\n"
+        f"{', '.join(n for n, _, _ in bad)}\n"
         "             git acts as that token's owner whatever profile is active, "
         "and every command that prints a remote leaks it.\n"
         "             Strip it, then let a credential helper supply the secret:\n"
         + "".join(
-            f"               git remote set-url {n} "
-            f"$(git remote get-url {n} | sed -E 's#//[^@/]+@#//#')\n"
-            for n in bad
+            (
+                f"               git remote set-url {n} "
+                f"$(git remote get-url {n} | sed -E 's#//[^@/]+@#//#')\n"
+                if fetch else ""
+            ) + (
+                f"               u=$(git config --get-all remote.{n}.pushurl | "
+                f"sed -E 's#//[^@/]+@#//#'); "
+                f"git config --unset-all remote.{n}.pushurl; "
+                f"for x in $u; do git remote set-url --push --add {n} \"$x\"; done\n"
+                if push else ""
+            )
+            for n, fetch, push in bad
         )
         + (
             "               git config --global credential.helper osxkeychain\n"

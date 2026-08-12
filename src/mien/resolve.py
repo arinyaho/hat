@@ -260,6 +260,14 @@ def git_origin_remote(cwd: str) -> str | None:
     Thin git I/O, kept separate so the matching logic stays pure and testable and
     callers can mock it. Never raises: no repo, no `origin`, or no `git` on PATH
     all return None, so a status line built on it stays silent rather than failing.
+
+    Fetch URL deliberately: this answers "who owns this repository" for identity
+    routing, and the fetch URL is that answer.
+
+    ponytail: so a credential that lives only in `remote.origin.pushurl` does not
+    raise the status-line warning — `mien doctor` reports it. Add a separate
+    pushurl query here if the status line needs to catch it too; do not widen this
+    function, whose result also feeds owner matching.
     """
     try:
         result = subprocess.run(
