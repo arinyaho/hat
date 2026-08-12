@@ -116,8 +116,22 @@ def _scope_block(scope) -> str:
 
 
 def render_ambient(profiles: dict[str, Profile]) -> str:
+    """Render every profile's scopes into one ambient script.
+
+    Blocks are emitted in profile-name order, then in the order the scopes were
+    declared, and every matching block runs — so the last `export` wins. Nothing
+    sorts by specificity: a narrow scope beats a broad one only if it is
+    declared after it, within one profile. Two profiles whose `match` globs
+    overlap are resolved by name alone: the alphabetically last one wins, not
+    the more specific one, and no declaration order can change that. That is
+    fine while project paths
+    are disjoint — the normal case, and the only one this is meant for — and it
+    is an accepted boundary rather than an oversight. Sort by match specificity
+    across profiles if it ever bites; until then, name order at least makes the
+    outcome deterministic rather than dict-order-dependent.
+    """
     blocks = []
-    for name in sorted(profiles):  # deterministic; see plan note on cross-profile order
+    for name in sorted(profiles):
         for scope in profiles[name].project_env:
             blocks.append(_scope_block(scope))
     body = ("\n".join(blocks) + "\n") if blocks else ""
