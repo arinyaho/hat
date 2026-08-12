@@ -230,6 +230,34 @@ def test_discover_remotes_flags_a_repository_whose_remote_carries_a_token(tmp_pa
     assert ("remote", "github.com/acme") in [(f.provider, f.identifier) for f in found]
 
 
+def test_discover_remotes_keeps_a_malformed_credential_out_of_the_owner(tmp_path):
+    """A password with an unencoded `/` must not reach the report: read only as
+    far as the first slash, `user:ab/cd@github.com` becomes the owner, and
+    `--own` would write that fragment into the config."""
+    home = tmp_path / "home"
+    urls = dict([
+        _repo(home, "Projects/typo", "https://user:ab/cd@github.com/acme/x.git"),
+    ])
+    found = discover_remotes([home], origin=urls.get)
+
+    assert "user" not in repr(found) and "ab/cd" not in repr(found)
+    assert [(f.provider, f.identifier) for f in found if f.provider == "remote"] == [
+        ("remote", "github.com/acme")]
+
+
+def test_discover_remotes_skips_a_local_path_remote(tmp_path):
+    """A local path has no host and no owner, so its leading directories are not
+    a claimable owner — `--own /home` would claim every local remote here."""
+    home = tmp_path / "home"
+    urls = dict([
+        _repo(home, "Projects/lib", "/home/me/repos/lib"),
+        _repo(home, "Projects/mirror", "file:///srv/git/repo.git"),
+        _repo(home, "Projects/api", "https://github.com/acme/api"),
+    ])
+    assert [f.identifier for f in discover_remotes([home], origin=urls.get)] == [
+        "github.com/acme"]
+
+
 def test_render_report_leads_with_a_leaking_remote_and_offers_no_command():
     """It leads because it is already leaking, and offers no fix command because
     where the credential lives decides the fix — only `mien doctor` can say."""

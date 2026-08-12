@@ -155,7 +155,8 @@ def discover_remotes(
     Owners come from the same `normalize_remote` form `owns_remotes` is matched
     in, so what is reported and what is written mean one thing. A remote with no
     owner segment (`host/repo`, some self-hosted setups) is skipped rather than
-    reported as owning a whole host.
+    reported as owning a whole host, and so is a local-path remote, which has no
+    host or owner at all.
     """
     owners: dict[str, list[str]] = {}
     leaks: list[Found] = []
@@ -177,7 +178,11 @@ def discover_remotes(
                 leaks.append(Found("leak", str(repo)))
             norm = normalize_remote(url)
             parts = norm.split("/")
-            if len(parts) < 3:
+            # A local path (`/srv/git/repo`, `file:///srv/git/repo.git`, which
+            # normalizes to the same shape) has no host and no owner, so its
+            # leading segments are directories, not something to claim — a glob
+            # written from them would claim every local remote on the machine.
+            if norm.startswith("/") or len(parts) < 3:
                 continue
             remotes = owners.setdefault("/".join(parts[:2]), [])
             if norm not in remotes:  # two clones of one repository are one remote

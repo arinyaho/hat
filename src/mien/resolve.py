@@ -165,6 +165,30 @@ def resolve_profile(profiles: dict[str, Profile], path: str) -> str | None:
     return winners[0]
 
 
+def _split_userinfo(rest: str) -> tuple[str, str]:
+    """Split a post-scheme `userinfo@host/path` into (userinfo, host/path).
+
+    Userinfo normally ends at the first `@`, which sits before the first `/`. A
+    password containing an unencoded `/` pushes that `@` past the first `/`, and
+    stopping at the slash would leave a fragment of the credential in the host
+    position — printed as an owner, or written into `owns_remotes`. Such a URL is
+    a mistyped remote (git stores it, but curl reads the authority as `host:port`
+    and rejects it), and it is recognizable by exactly that: an authority that is
+    not a valid `host[:port]`. In that shape the userinfo runs to the last `@`,
+    so the whole of it is stripped. A valid authority is split at its first `@`,
+    which leaves an `@` inside a path alone.
+    """
+    authority = rest.split("/", 1)[0]
+    if "@" in authority:
+        userinfo, _, tail = rest.partition("@")
+        return userinfo, tail
+    if not re.fullmatch(r"[^:@]*(:\d*)?", authority):
+        userinfo, sep, tail = rest.rpartition("@")
+        if sep:
+            return userinfo, tail
+    return "", rest
+
+
 def normalize_remote(url: str) -> str:
     """Reduce a git remote URL to a canonical, lower-cased ``host/path``.
 
@@ -181,7 +205,7 @@ def normalize_remote(url: str) -> str:
         s = s[:-4]
     if "://" in s:
         s = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", s)  # drop scheme
-        s = re.sub(r"^[^/@]+@", "", s)                     # drop user@
+        s = _split_userinfo(s)[1]                          # drop user@
         s = re.sub(r"^([^/:]+):\d+", r"\1", s)             # drop :port from the host
                                                            # (e.g. GitHub's ssh.github.com:443)
     elif re.match(r"^[^/]+@[^:/]+:", s):                   # scp-like git@host:path
@@ -217,10 +241,12 @@ def remote_embeds_credential(url: str | None) -> bool:
     """
     if not url:
         return False
-    m = re.match(r"^https?://([^/]+)@", url.strip(), re.IGNORECASE)
+    m = re.match(r"^https?://", url.strip(), re.IGNORECASE)
     if not m:
         return False
-    userinfo = m.group(1)
+    userinfo = _split_userinfo(url.strip()[m.end():])[0]
+    if not userinfo:
+        return False
     return ":" in userinfo or userinfo.startswith(CREDENTIAL_PREFIXES)
 
 
