@@ -1945,6 +1945,19 @@ def token_cmd(service: str, profile: str | None, force: bool) -> None:
     identity = getattr(prof, service)
     if not identity:
         raise click.ClickException(f"profile {name!r} has no {service} identity")
+    # A gcloud-login-only google is a legitimate configured state, but there is
+    # no stored refresh token to exchange — and the keychain backend crashes
+    # hard on a None reference. Same placement rationale as the capture check
+    # below: name the real misconfiguration before offering any substitute.
+    if service == "google" and not (
+            identity.oauth_client_secret_ref and identity.refresh_token_ref):
+        raise click.ClickException(
+            f"profile {name!r} has no stored google OAuth credentials — only a "
+            "gcloud login, which has no refresh token to exchange.\n"
+            f"  Use a Google client library: mien exec {name} -- <your command>\n"
+            f"  Or store credentials: mien login {name} --service google "
+            "--email <you> --client-id <id>"
+        )
 
     # The capture check sits here on purpose: *after* the identity is resolved,
     # *before* the backend is touched. Refusing first would replace a real
