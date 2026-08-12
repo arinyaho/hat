@@ -99,7 +99,18 @@ def test_discover_remotes_groups_by_owner_and_stays_in_the_tree(tmp_path):
     urls[str(outside / "secret")] = "https://github.com/outside/secret"
     (home / "Projects" / "link").symlink_to(outside)
 
-    found = discover_remotes([home], origin=urls.get)
+    visited: list[str] = []
+
+    def origin(path):
+        visited.append(path)
+        return urls.get(path)
+
+    found = discover_remotes([home], origin=origin)
+    # The symlink is not followed, so the walk visits only repositories inside
+    # the tree it was pointed at — asserted on what it reached, not on what a
+    # lookup returns for it.
+    assert visited == [str(home / "Projects" / name)
+                       for name in ("api", "blog", "hostonly", "web")]
     # Every repository is reported, grouped under its owner: coverage is a
     # question about all of an owner's repositories, not about one sample.
     assert [(f.provider, f.identifier, f.detail) for f in found] == [
