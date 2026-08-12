@@ -996,60 +996,65 @@ def _repo(tmp_path, monkeypatch, remotes):
     return repo
 
 
-def test_doctor_names_only_credentialed_remote_and_its_fix_works(
+def _doctor(runner, mien_cfg, mocker, repo):
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert TOKEN not in result.output  # the URL is the secret; never print it.
+    return result.output
+
+
+def test_doctor_names_only_the_credentialed_remote(
     runner, mien_cfg, mocker, monkeypatch, tmp_path
 ):
     repo = _repo(tmp_path, monkeypatch, {
-        "clean": "https://github.com/example/clean.git",
+        "tidy": "https://github.com/example/tidy.git",
         "leaky": f"https://x-access-token:{TOKEN}@github.com/example/leaky.git",
     })
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    mocker.patch("mien.cli.load_backend")
-    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
-
-    result = runner.invoke(main, ["doctor"])
-    assert result.exit_code == 0, result.output
-    assert "leaky" in result.output
-    assert "clean" not in result.output
-    assert TOKEN not in result.output
-
-    # The remediation must be a command that actually works, not just a string.
-    fix = next(ln.strip() for ln in result.output.splitlines()
-               if ln.strip().startswith("git remote set-url"))
-    subprocess.run(fix, shell=True, cwd=repo, check=True)
-    url = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "leaky"],
-                         capture_output=True, text=True, check=True).stdout
-    assert TOKEN not in url
-    assert url.strip() == "https://github.com/example/leaky.git"
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "leaky (fetch" in out
+    assert "tidy" not in out
+    # Nothing printed may mutate the repository: a generated command cannot be
+    # right for a rewrite rule it cannot see, and a wrong one destroys config.
+    assert "set-url {}" not in out and "--unset" not in out
 
 
-def test_doctor_finds_credential_in_push_url_and_its_fix_works(
+def test_doctor_finds_credential_only_on_the_push_side(
     runner, mien_cfg, mocker, monkeypatch, tmp_path
 ):
-    # Fetch URL clean, push URL dirty: `git remote get-url` shows nothing wrong.
+    # Fetch URL tidy, push URL dirty: plain `git remote get-url` shows nothing.
     repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
     subprocess.run(["git", "-C", str(repo), "remote", "set-url", "--push", "origin",
                     f"https://x-access-token:{TOKEN}@github.com/example/r.git"], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "--push", "--add", "origin",
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (push)" in out
+
+
+def test_doctor_finds_credential_in_an_extra_remote_url(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # A second `remote.<n>.url` acts as a push URL; `get-url` without --all hides it.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--add", "remote.origin.url",
                     f"https://x-access-token:{TOKEN}@example.com/mirror.git"], check=True)
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    mocker.patch("mien.cli.load_backend")
-    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (fetch, push)" in out
 
-    result = runner.invoke(main, ["doctor"])
-    assert result.exit_code == 0, result.output
-    assert "remotes:" in result.output
-    assert "origin" in result.output
-    assert TOKEN not in result.output
 
-    fix = next(ln.strip() for ln in result.output.splitlines() if "--push" in ln)
-    subprocess.run(fix, shell=True, cwd=repo, check=True)
-    urls = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "--all", "--push",
-                           "origin"], capture_output=True, text=True, check=True).stdout
-    assert TOKEN not in urls
-    assert urls.split() == ["https://github.com/example/r.git",
-                            "https://example.com/mirror.git"]
-    assert "remotes:" not in runner.invoke(main, ["doctor"]).output
+def test_doctor_finds_credential_injected_by_insteadof(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # The remote URL is tidy; a global rewrite rule puts the token in front of it.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--global",
+                    f"url.https://x-access-token:{TOKEN}@github.com/.insteadOf",
+                    "https://github.com/"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (fetch, push)" in out
+    # The remedy must point at the rewrite rule, which is not on the remote.
+    assert "insteadof" in out
 
 
 def test_doctor_silent_on_clean_remotes(runner, mien_cfg, mocker, monkeypatch, tmp_path):
