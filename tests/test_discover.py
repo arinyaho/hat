@@ -126,6 +126,29 @@ def test_owner_glob_claims_the_owner():
     assert owner_glob("GitHub.com/Acme/") == "github.com/acme/*"
 
 
+def test_owner_glob_treats_a_metacharacter_in_the_owner_as_data():
+    """An owner is read out of a repository's remote URL, so a `*` in it is data,
+    not a pattern — escaped, exactly as `resolve._expand_vars` escapes one
+    arriving in a variable's value. Unescaped it would claim the whole host."""
+    from mien.resolve import resolve_remote_profile
+
+    found = discover_remotes([], origin=lambda p: None) + [
+        Found("remote", "github.com/*", "github.com/*/x")]
+    # Reported owner, and a hint that survives a paste into a shell.
+    report = render_report(found, {})
+    assert "· github.com/* (github.com/*/x) — no profile owns it" in report
+    assert "mien discover --own 'github.com/*' --profile <profile>" in report
+
+    written = owner_glob("github.com/*")
+    assert written == "github.com/[*]/*"
+    profiles = {"work": Profile(name="work", owns_remotes=[written])}
+    # It still claims the repository it came from …
+    assert resolve_remote_profile(profiles, "https://github.com/*/x.git") == "work"
+    # … and nothing else on the host.
+    assert resolve_remote_profile(profiles, "git@github.com:unrelated-org/svc.git") is None
+    assert resolve_remote_profile(profiles, "https://github.com/anyone/anything") is None
+
+
 def test_discover_remotes_flags_a_repository_whose_remote_carries_a_token(tmp_path):
     """The walk already has every repository's remote in hand, so it can answer
     the one question no per-repository command can: which repositories on this

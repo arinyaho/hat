@@ -2925,6 +2925,28 @@ def test_discover_own_writes_a_glob_that_actually_claims_the_repo(
                                   "git@github.com:me/blog.git") == "work"
 
 
+def test_discover_own_does_not_let_a_star_in_a_remote_claim_the_host(
+        runner, tmp_path, monkeypatch):
+    """A repository's own remote URL must not be able to widen a claim: owning
+    `github.com/*` claims that one owner literally, not everyone on the host."""
+    from mien.config import load_config
+    from mien.resolve import resolve_remote_profile
+
+    _remote_cfg(tmp_path, monkeypatch, work=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "x", "https://github.com/*/x.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/*", "--profile", "work"])
+    assert result.exit_code == 0, result.output
+    profiles = load_config().profiles
+    assert profiles["work"].owns_remotes == ["github.com/[*]/*"]
+    assert resolve_remote_profile(profiles, "https://github.com/*/x.git") == "work"
+    assert resolve_remote_profile(
+        profiles, "git@github.com:unrelated-org/svc.git") is None
+    assert resolve_remote_profile(profiles, "https://github.com/anyone/anything") is None
+
+
 def test_discover_own_refuses_an_owner_no_repo_here_has(
         runner, tmp_path, monkeypatch):
     from mien.config import load_config

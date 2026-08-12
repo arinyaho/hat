@@ -17,7 +17,9 @@ credential stays an explicit `mien login`; claiming an owner stays an explicit
 from __future__ import annotations
 
 import configparser
+import glob
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,8 +175,16 @@ def discover_remotes(
 
 
 def owner_glob(owner: str) -> str:
-    """The `owns_remotes` glob that claims ``owner`` and its repositories."""
-    return f"{owner.strip().rstrip('/').lower()}/*"
+    """The `owns_remotes` glob that claims ``owner`` and its repositories.
+
+    A glob metacharacter (`*`, `?`, `[`) in the owner is escaped, for the same
+    reason `resolve._expand_vars` escapes one arriving in a variable's value: it
+    got here as *data* — read out of some repository's remote URL — not as a
+    pattern the user wrote. Unescaped, a remote like `https://github.com/*/x.git`
+    would write `github.com/*/*` and claim every owner on the host, letting a
+    repository configure identity merely by being looked at.
+    """
+    return f"{glob.escape(owner.strip().rstrip('/').lower())}/*"
 
 
 def _remote_claimed_by(profiles: dict[str, Profile], remote: str) -> str | None:
@@ -220,7 +230,10 @@ def _import_hint(item: Found) -> str:
         email = f" --email {item.detail}" if item.detail else ""
         return f"mien login {p} --service google{email} --client-id <id>"
     if item.provider == "remote":
-        return f"mien discover --own {item.identifier} --profile {p}"
+        # Quoted, because an owner read off a remote can contain shell/glob
+        # characters: pasted bare, `github.com/*` would be expanded by the shell
+        # before mien ever sees it.
+        return f"mien discover --own {shlex.quote(item.identifier)} --profile {p}"
     return ""
 
 
