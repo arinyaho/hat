@@ -3,7 +3,8 @@ import pytest
 from mien.config import AtlassianService, GitHubService, GoogleService, Profile
 from mien.resolve import (AmbiguousScope, claimed_profile, expand_scope,
                           match_base, normalize_remote, profile_for_email,
-                          resolve_profile, resolve_remote_profile)
+                          remote_embeds_credential, resolve_profile,
+                          resolve_remote_profile)
 
 
 def _gp(name, *, google=None, atlassian=None, github=None):
@@ -405,3 +406,59 @@ class TestResolveProfile:
         nothing to disambiguate."""
         p = profiles(prof("work", "*/Projects", "*/Projects/acme"))
         assert resolve_profile(p, "/Users/me/Projects/acme") == "work"
+
+
+class TestRemoteEmbedsCredential:
+    """A token in a remote URL is an identity mien cannot route: git acts as its
+    owner whatever profile is active, and printing the remote leaks the secret."""
+
+    def test_flags_a_token_in_the_userinfo(self):
+        assert remote_embeds_credential(
+            "https://x-access-token:TOKEN@github.com/acme/repo.git"
+        )
+        assert remote_embeds_credential("https://user:TOKEN@github.com/acme/repo")
+        assert remote_embeds_credential("HTTP://user:TOKEN@example.com/r")
+
+    def test_flags_a_bare_token_userinfo(self):
+        """`git clone https://$TOKEN@host/...` leaves the token alone in the
+        userinfo; git sends it as the Basic username and it authenticates."""
+        assert remote_embeds_credential(
+            "https://ghp_0123456789abcdef@github.com/acme/repo.git"
+        )
+        assert remote_embeds_credential(
+            "https://github_pat_0123456789@github.com/acme/repo"
+        )
+
+    def test_flags_the_gitlab_forms_through_the_password_branch(self):
+        """GitLab does not accept a bare PAT as the whole userinfo; its real
+        forms carry a `:` and are caught without any prefix of their own."""
+        assert remote_embeds_credential(
+            "https://gitlab-ci-token:0123456789@gitlab.com/acme/repo"
+        )
+        assert remote_embeds_credential("https://oauth2:0123456789@gitlab.com/acme/repo")
+
+    def test_ignores_forms_that_carry_no_secret(self):
+        """A false positive would train people to ignore the warning, so a bare
+        userinfo flags only on a known token prefix — otherwise it is a username
+        git prompts against, and ssh userinfo is just `git`."""
+        assert not remote_embeds_credential("https://github.com/acme/repo.git")
+        assert not remote_embeds_credential("https://arinyaho@github.com/acme/repo")
+        assert not remote_embeds_credential("https://Ghp_notatoken@github.com/acme/r")
+
+    def test_ignores_usernames_that_merely_start_like_a_token(self):
+        """`xoxo`, `glpat-user` and `ATATuser` are legal forge usernames; only
+        prefixes containing an underscore (illegal in a GitHub username) flag."""
+        assert not remote_embeds_credential("https://xoxo@github.com/acme/repo")
+        assert not remote_embeds_credential("https://glpat-user@gitlab.com/a/b")
+        assert not remote_embeds_credential("https://ATATuser@example.com/a/b")
+        assert not remote_embeds_credential("git@github.com:acme/repo.git")
+        assert not remote_embeds_credential("ssh://git@github.com/acme/repo.git")
+        assert not remote_embeds_credential(None)
+        assert not remote_embeds_credential("")
+
+    def test_a_flagged_remote_still_normalizes_without_the_secret(self):
+        """The matching path must never carry the token into a message: an
+        AmbiguousScope error or a log line prints the normalized form."""
+        norm = normalize_remote("https://x-access-token:TOKEN@github.com/acme/repo.git")
+        assert norm == "github.com/acme/repo"
+        assert "TOKEN" not in norm

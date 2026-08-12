@@ -189,6 +189,41 @@ def normalize_remote(url: str) -> str:
     return s.rstrip("/").lower()
 
 
+# Literal, case-sensitive prefixes of issued tokens. Add a provider here.
+# GitHub tokens only: an underscore is illegal in a GitHub username, so none of
+# these can be a real user. Other forges' tokens are deliberately absent — their
+# prefixes (`glpat-`, and Slack/Atlassian tokens that cannot authenticate git at
+# all) are legal usernames, and the real GitLab forms `gitlab-ci-token:<token>@`
+# and `oauth2:<token>@` are caught by the password branch.
+CREDENTIAL_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
+
+
+def remote_embeds_credential(url: str | None) -> bool:
+    """True if ``url`` carries a secret in its userinfo — `https://user:token@host`.
+
+    This is an identity mien does not route and cannot see: git authenticates as
+    whoever that token belongs to, no matter which profile is active, and every
+    command that prints a remote (`git remote -v`, `git config --list`, a push
+    error) writes the secret into a terminal, a CI log, or an agent transcript.
+
+    A *password* component always counts. A bare userinfo counts only when it
+    looks like a token: `git clone https://$TOKEN@host/...` leaves the secret
+    alone in the userinfo, and git sends it as the Basic username with an empty
+    password — a working credential. A bare `https://username@host` names a user
+    git prompts against, so it is flagged only on a GitHub token prefix, matched
+    case-sensitively — each contains an underscore, which GitHub forbids in a
+    username, so no real user can collide with one. A false positive here would
+    train people to ignore the warning.
+    """
+    if not url:
+        return False
+    m = re.match(r"^https?://([^/]+)@", url.strip(), re.IGNORECASE)
+    if not m:
+        return False
+    userinfo = m.group(1)
+    return ":" in userinfo or userinfo.startswith(CREDENTIAL_PREFIXES)
+
+
 def resolve_remote_profile(profiles: dict[str, Profile], remote: str) -> str | None:
     """Return the profile whose ``owns_remotes`` claims ``remote``, or None.
 
@@ -225,6 +260,15 @@ def git_origin_remote(cwd: str) -> str | None:
     Thin git I/O, kept separate so the matching logic stays pure and testable and
     callers can mock it. Never raises: no repo, no `origin`, or no `git` on PATH
     all return None, so a status line built on it stays silent rather than failing.
+
+    Fetch URL deliberately: this answers "who owns this repository" for identity
+    routing, and the fetch URL is that answer.
+
+    ponytail: so a credential reachable only on the push side (`remote.origin.
+    pushurl`, or a `pushInsteadOf` rule) does not raise the status-line warning —
+    `mien doctor` reports it. Add a separate push-side query here if the status
+    line needs to catch it too; do not widen this function, whose result also
+    feeds owner matching.
     """
     try:
         result = subprocess.run(

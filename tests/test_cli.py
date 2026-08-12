@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -764,6 +765,31 @@ def test_token_google_explicit_profile_beats_env(runner, mien_cfg, mocker):
     assert "someone-else" not in result.output
 
 
+def test_token_google_without_stored_oauth_fails_cleanly(runner, mien_cfg, mocker):
+    """A gcloud-login-only google has no refresh token to exchange. That must be
+    a ClickException, not a crash — the keychain backend aborts the process when
+    handed a None reference."""
+    from mien.config import GoogleService, Profile
+    _save_one_profile(Profile(name="personal", google=GoogleService(
+        email="me@example.com", oauth_client_id="cid",
+        oauth_client_secret_ref=None, refresh_token_ref=None,
+        adc_ref=None, gcloud_config_name="personal", default_project=None,
+    )))
+    backend = mocker.patch("mien.cli.load_backend").return_value
+
+    result = runner.invoke(
+        main,
+        ["token", "google", "--profile", "personal", "--force"],
+        env={"MIEN_CONFIG": str(mien_cfg)},
+    )
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "no stored google OAuth credentials" in result.output
+    assert "mien exec personal" in result.output
+    assert "mien login personal --service google" in result.output
+    backend.get.assert_not_called()
+
+
 def test_token_without_profile_or_env_names_both_remedies(runner, mien_cfg, mocker, monkeypatch):
     """The error must name both remedies: the --profile flag and the eval pattern."""
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
@@ -978,6 +1004,133 @@ def test_doctor_gc_sweeps(runner, mien_cfg, mocker):
     gc = mocker.patch("mien.cli.EphemeralStore.gc")
     runner.invoke(main, ["doctor", "--gc"])
     gc.assert_called_once()
+
+
+TOKEN = "ghp_" + "0" * 36
+
+
+def _repo(tmp_path, monkeypatch, remotes):
+    """A throwaway git repo with ``remotes`` ({name: url}), isolated from real config."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(tmp_path / "gitconfig-system"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    for name, url in remotes.items():
+        subprocess.run(["git", "-C", str(repo), "remote", "add", name, url], check=True)
+    return repo
+
+
+def _doctor(runner, mien_cfg, mocker, repo):
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert TOKEN not in result.output  # the URL is the secret; never print it.
+    return result.output
+
+
+def test_doctor_names_only_the_credentialed_remote(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    repo = _repo(tmp_path, monkeypatch, {
+        "tidy": "https://github.com/example/tidy.git",
+        "leaky": f"https://x-access-token:{TOKEN}@github.com/example/leaky.git",
+    })
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "leaky (fetch" in out
+    assert "tidy" not in out
+    # Nothing printed may be a runnable command built from this repo's own
+    # remotes: a generated command cannot be right for a rewrite rule it cannot
+    # see, and a wrong one destroys config. Commands stay placeholder prose.
+    for line in out.splitlines():
+        if "git " not in line:
+            continue
+        # No actual remote name or URL interpolated into a command line...
+        assert "leaky" not in line and "github.com" not in line, line
+        # ...and nothing that rewrites config on its own.
+        assert not any(s in line for s in ("$(", "sed ", "--unset")), line
+    # No suggested command may print the credential: a rewrite rule's config key
+    # IS the credentialed URL, so any listing of it prints the token.
+    assert "--list" not in out
+    assert "--get-regexp" not in out or "do not list it with" in out
+
+
+def test_doctor_finds_credential_only_on_the_push_side(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # Fetch URL tidy, push URL dirty: plain `git remote get-url` shows nothing.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "--push", "origin",
+                    f"https://x-access-token:{TOKEN}@github.com/example/r.git"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (push)" in out
+
+
+def test_doctor_finds_credential_in_an_extra_remote_url(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # A second `remote.<n>.url` acts as a push URL; `get-url` without --all hides it.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--add", "remote.origin.url",
+                    f"https://x-access-token:{TOKEN}@example.com/mirror.git"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (fetch, push)" in out
+
+
+def test_doctor_finds_credential_injected_by_insteadof(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # The remote URL is tidy; a global rewrite rule puts the token in front of it.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--global",
+                    f"url.https://x-access-token:{TOKEN}@github.com/.insteadOf",
+                    "https://github.com/"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (fetch, push)" in out
+    # The remedy must point at the rewrite rule, which is not on the remote — and
+    # send the user to the editor, since the rule's config key IS the token.
+    assert "git config --global --edit" in out
+    assert "do not list it with" in out
+
+
+def test_doctor_finds_credential_injected_by_pushinsteadof(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # `pushInsteadOf` rewrites only the push side, and only for `get-url --push`:
+    # the raw config keys carry no token at all.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--global",
+                    f"url.https://x-access-token:{TOKEN}@github.com/.pushInsteadOf",
+                    "https://github.com/"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (push)" in out
+    assert "git config --global --edit" in out
+
+
+def test_doctor_silent_on_clean_remotes(runner, mien_cfg, mocker, monkeypatch, tmp_path):
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/clean.git"})
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "remotes:" not in result.output
+
+
+def test_doctor_outside_a_repository_does_not_error(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(plain))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "remotes:" not in result.output
 
 
 def test_init_rejects_project_name_with_space(runner, mien_cfg):
