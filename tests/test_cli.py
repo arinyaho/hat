@@ -1057,6 +1057,20 @@ def test_doctor_finds_credential_injected_by_insteadof(
     assert "insteadof" in out
 
 
+def test_doctor_finds_credential_injected_by_pushinsteadof(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    # `pushInsteadOf` rewrites only the push side, and only for `get-url --push`:
+    # the raw config keys carry no token at all.
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/r.git"})
+    subprocess.run(["git", "-C", str(repo), "config", "--global",
+                    f"url.https://x-access-token:{TOKEN}@github.com/.pushInsteadOf",
+                    "https://github.com/"], check=True)
+    out = _doctor(runner, mien_cfg, mocker, repo)
+    assert "origin (push)" in out
+    assert "insteadof" in out
+
+
 def test_doctor_silent_on_clean_remotes(runner, mien_cfg, mocker, monkeypatch, tmp_path):
     repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/clean.git"})
     runner.invoke(main, ["init"], input="2\nmien-\n")
