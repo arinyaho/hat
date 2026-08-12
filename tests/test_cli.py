@@ -2974,6 +2974,37 @@ def test_discover_own_refuses_to_claim_another_profiles_owner(
     assert load_config().profiles["personal"].owns_remotes == []
 
 
+def test_discover_own_refuses_to_split_a_partly_owned_owner(
+        runner, tmp_path, monkeypatch):
+    """One repository owned by another profile is enough to refuse: claiming the
+    rest would leave the owner split between two identities."""
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/me/blog"], personal=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "personal"])
+    assert result.exit_code != 0
+    # Names the other profile and the repository it already owns.
+    assert "already owned by 'work' (github.com/me/blog)" in result.output
+    assert load_config().profiles["personal"].owns_remotes == []
+
+
+def test_discover_own_claims_an_owner_nobody_owns(runner, tmp_path, monkeypatch):
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=[], personal=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "personal"])
+    assert result.exit_code == 0, result.output
+    assert load_config().profiles["personal"].owns_remotes == ["github.com/me/*"]
+
+
 def test_discover_own_finishes_a_partly_owned_owner(runner, tmp_path, monkeypatch):
     """Owning one repository of an owner must not dead-end the rest: the report
     calls that partly owned, and the claim widens it to the whole owner."""

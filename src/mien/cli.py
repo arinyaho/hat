@@ -1612,25 +1612,28 @@ def discover_cmd(scan_roots: tuple[str, ...], own: str | None,
             f"repositories live elsewhere.")
 
     # Every repository of the owner, not one sample: a profile can own some of
-    # them and none of the rest, and that partial case is exactly the one a
-    # claim is *for*. Refuse only when there is nothing left to claim.
+    # them and none of the rest. One repository already owned by *another*
+    # profile is enough to refuse — claiming the owner anyway would leave it
+    # split between two identities, with the older, narrower glob silently
+    # winning for the repositories it matches.
     try:
         claims = {s: resolve_remote_profile(cfg.profiles, s) for s in samples}
     except AmbiguousScope as exc:
         raise click.ClickException(str(exc)) from exc
-    unclaimed = [s for s, c in claims.items() if c is None]
-    existing = sorted({c for c in claims.values() if c})
-    if not unclaimed:
-        if existing == [profile_name]:
-            raise click.ClickException(
-                f"{profile_name} already owns every repository of {owner} "
-                f"(owns_remotes: "
-                f"{', '.join(cfg.profiles[profile_name].owns_remotes)}).")
+    taken = {s: c for s, c in claims.items() if c and c != profile_name}
+    if taken:
+        others = ", ".join(f"{c!r} ({s})" for s, c in sorted(taken.items()))
         raise click.ClickException(
-            f"every repository of {owner} is already owned by "
-            f"{', '.join(repr(e) for e in existing)}. Two profiles claiming one "
+            f"{len(taken)} of {len(samples)} repositories of {owner} are "
+            f"already owned by {others}. Two profiles claiming one "
             f"owner is how identity gets misrouted — edit owns_remotes in "
             f"{config_path()} if this repository really moved.")
+    unclaimed = [s for s, c in claims.items() if c is None]
+    if not unclaimed:
+        raise click.ClickException(
+            f"{profile_name} already owns every repository of {owner} "
+            f"(owns_remotes: "
+            f"{', '.join(cfg.profiles[profile_name].owns_remotes)}).")
     # The claim is verified against a repository nothing owned before, so the
     # check proves the new glob did the work rather than an older, narrower one.
     sample = unclaimed[0]
