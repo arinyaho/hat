@@ -428,7 +428,14 @@ class TestRemoteEmbedsCredential:
         assert remote_embeds_credential(
             "https://github_pat_0123456789@github.com/acme/repo"
         )
-        assert remote_embeds_credential("https://glpat-0123456789@gitlab.com/acme/repo")
+
+    def test_flags_the_gitlab_forms_through_the_password_branch(self):
+        """GitLab does not accept a bare PAT as the whole userinfo; its real
+        forms carry a `:` and are caught without any prefix of their own."""
+        assert remote_embeds_credential(
+            "https://gitlab-ci-token:0123456789@gitlab.com/acme/repo"
+        )
+        assert remote_embeds_credential("https://oauth2:0123456789@gitlab.com/acme/repo")
 
     def test_ignores_forms_that_carry_no_secret(self):
         """A false positive would train people to ignore the warning, so a bare
@@ -437,6 +444,13 @@ class TestRemoteEmbedsCredential:
         assert not remote_embeds_credential("https://github.com/acme/repo.git")
         assert not remote_embeds_credential("https://arinyaho@github.com/acme/repo")
         assert not remote_embeds_credential("https://Ghp_notatoken@github.com/acme/r")
+
+    def test_ignores_usernames_that_merely_start_like_a_token(self):
+        """`xoxo`, `glpat-user` and `ATATuser` are legal forge usernames; only
+        prefixes containing an underscore (illegal in a GitHub username) flag."""
+        assert not remote_embeds_credential("https://xoxo@github.com/acme/repo")
+        assert not remote_embeds_credential("https://glpat-user@gitlab.com/a/b")
+        assert not remote_embeds_credential("https://ATATuser@example.com/a/b")
         assert not remote_embeds_credential("git@github.com:acme/repo.git")
         assert not remote_embeds_credential("ssh://git@github.com/acme/repo.git")
         assert not remote_embeds_credential(None)

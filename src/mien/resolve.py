@@ -190,12 +190,12 @@ def normalize_remote(url: str) -> str:
 
 
 # Literal, case-sensitive prefixes of issued tokens. Add a provider here.
-CREDENTIAL_PREFIXES = (
-    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_",  # GitHub
-    "glpat-",                                               # GitLab
-    "ATAT",                                                 # Atlassian
-    "xox",                                                  # Slack
-)
+# GitHub tokens only: an underscore is illegal in a GitHub username, so none of
+# these can be a real user. Other forges' tokens are deliberately absent — their
+# prefixes (`glpat-`, and Slack/Atlassian tokens that cannot authenticate git at
+# all) are legal usernames, and the real GitLab forms `gitlab-ci-token:<token>@`
+# and `oauth2:<token>@` are caught by the password branch.
+CREDENTIAL_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
 
 
 def remote_embeds_credential(url: str | None) -> bool:
@@ -210,9 +210,10 @@ def remote_embeds_credential(url: str | None) -> bool:
     looks like a token: `git clone https://$TOKEN@host/...` leaves the secret
     alone in the userinfo, and git sends it as the Basic username with an empty
     password — a working credential. A bare `https://username@host` names a user
-    git prompts against, so it is flagged only on a known credential prefix
-    (matched case-sensitively; real usernames do not look like these). A false
-    positive here would train people to ignore the warning.
+    git prompts against, so it is flagged only on a GitHub token prefix, matched
+    case-sensitively — each contains an underscore, which GitHub forbids in a
+    username, so no real user can collide with one. A false positive here would
+    train people to ignore the warning.
     """
     if not url:
         return False
