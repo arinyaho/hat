@@ -765,6 +765,31 @@ def test_token_google_explicit_profile_beats_env(runner, mien_cfg, mocker):
     assert "someone-else" not in result.output
 
 
+def test_token_google_without_stored_oauth_fails_cleanly(runner, mien_cfg, mocker):
+    """A gcloud-login-only google has no refresh token to exchange. That must be
+    a ClickException, not a crash — the keychain backend aborts the process when
+    handed a None reference."""
+    from mien.config import GoogleService, Profile
+    _save_one_profile(Profile(name="personal", google=GoogleService(
+        email="me@example.com", oauth_client_id="cid",
+        oauth_client_secret_ref=None, refresh_token_ref=None,
+        adc_ref=None, gcloud_config_name="personal", default_project=None,
+    )))
+    backend = mocker.patch("mien.cli.load_backend").return_value
+
+    result = runner.invoke(
+        main,
+        ["token", "google", "--profile", "personal", "--force"],
+        env={"MIEN_CONFIG": str(mien_cfg)},
+    )
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "no stored google OAuth credentials" in result.output
+    assert "mien exec personal" in result.output
+    assert "mien login personal --service google" in result.output
+    backend.get.assert_not_called()
+
+
 def test_token_without_profile_or_env_names_both_remedies(runner, mien_cfg, mocker, monkeypatch):
     """The error must name both remedies: the --profile flag and the eval pattern."""
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
