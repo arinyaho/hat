@@ -2064,10 +2064,12 @@ def _check_remote_credentials(cwd: str) -> None:
 
     A credential in a remote URL is the one identity mien cannot route around:
     git authenticates as that token's owner whatever profile is active, and the
-    secret is written in cleartext into `.git/config`, so `git remote -v`, a
-    push error, or an agent listing repositories copies it into a log or a
-    transcript. Stripping the userinfo is the whole fix — a credential helper
-    then supplies the secret per call instead of storing it in the tree.
+    secret sits in cleartext in git config, so `git remote -v`, a push error, or
+    an agent listing repositories copies it into a log or a transcript. It lives
+    either on the remote itself (`.git/config`) or in a `url.<base>.insteadOf` /
+    `pushInsteadOf` rewrite rule in the user's own config, which no amount of
+    editing the remote removes — hence the two-place fix the message prints,
+    followed by a credential helper supplying the secret per call.
 
     Prints the remote *names* and never a URL, since the URL is the secret.
 

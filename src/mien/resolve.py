@@ -264,10 +264,11 @@ def git_origin_remote(cwd: str) -> str | None:
     Fetch URL deliberately: this answers "who owns this repository" for identity
     routing, and the fetch URL is that answer.
 
-    ponytail: so a credential that lives only in `remote.origin.pushurl` does not
-    raise the status-line warning — `mien doctor` reports it. Add a separate
-    pushurl query here if the status line needs to catch it too; do not widen this
-    function, whose result also feeds owner matching.
+    ponytail: so a credential reachable only on the push side (`remote.origin.
+    pushurl`, or a `pushInsteadOf` rule) does not raise the status-line warning —
+    `mien doctor` reports it. Add a separate push-side query here if the status
+    line needs to catch it too; do not widen this function, whose result also
+    feeds owner matching.
     """
     try:
         result = subprocess.run(
