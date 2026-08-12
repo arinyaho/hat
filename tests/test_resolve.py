@@ -419,12 +419,24 @@ class TestRemoteEmbedsCredential:
         assert remote_embeds_credential("https://user:TOKEN@github.com/acme/repo")
         assert remote_embeds_credential("HTTP://user:TOKEN@example.com/r")
 
+    def test_flags_a_bare_token_userinfo(self):
+        """`git clone https://$TOKEN@host/...` leaves the token alone in the
+        userinfo; git sends it as the Basic username and it authenticates."""
+        assert remote_embeds_credential(
+            "https://ghp_0123456789abcdef@github.com/acme/repo.git"
+        )
+        assert remote_embeds_credential(
+            "https://github_pat_0123456789@github.com/acme/repo"
+        )
+        assert remote_embeds_credential("https://glpat-0123456789@gitlab.com/acme/repo")
+
     def test_ignores_forms_that_carry_no_secret(self):
-        """A false positive would train people to ignore the warning, so the
-        check demands a password component — a bare `user@` is a username git
-        prompts against, and ssh userinfo is just `git`."""
+        """A false positive would train people to ignore the warning, so a bare
+        userinfo flags only on a known token prefix — otherwise it is a username
+        git prompts against, and ssh userinfo is just `git`."""
         assert not remote_embeds_credential("https://github.com/acme/repo.git")
         assert not remote_embeds_credential("https://arinyaho@github.com/acme/repo")
+        assert not remote_embeds_credential("https://Ghp_notatoken@github.com/acme/r")
         assert not remote_embeds_credential("git@github.com:acme/repo.git")
         assert not remote_embeds_credential("ssh://git@github.com/acme/repo.git")
         assert not remote_embeds_credential(None)
