@@ -2081,17 +2081,13 @@ def _check_remote_credentials(cwd: str) -> None:
         return r.stdout if r.returncode == 0 else ""
 
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "remote"],
-            capture_output=True, text=True, timeout=2,
-        )
-        if result.returncode != 0:
-            return  # not a repository, or no git — nothing to report.
+        # A non-repository (or no git) yields no remote names, so the loop is
+        # empty and nothing is reported.
         # `get-url --all` lists every URL of a side and applies the user's
         # `insteadOf`/`pushInsteadOf` rewrites, so it sees a credential that the
         # raw config keys do not carry — which is exactly what git will use.
         bad: list[str] = []
-        for n in (n for n in result.stdout.split() if n):
+        for n in git("remote").split():
             sides = [
                 side
                 for side, args in (("fetch", ()), ("push", ("--push",)))
