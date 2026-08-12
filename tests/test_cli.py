@@ -1026,6 +1026,10 @@ def test_doctor_names_only_the_credentialed_remote(
         assert "leaky" not in line and "github.com" not in line, line
         # ...and nothing that rewrites config on its own.
         assert not any(s in line for s in ("$(", "sed ", "--unset")), line
+    # No suggested command may print the credential: a rewrite rule's config key
+    # IS the credentialed URL, so any listing of it prints the token.
+    assert "--list" not in out
+    assert "--get-regexp" not in out or "do not list it with" in out
 
 
 def test_doctor_finds_credential_only_on_the_push_side(
@@ -1060,8 +1064,10 @@ def test_doctor_finds_credential_injected_by_insteadof(
                     "https://github.com/"], check=True)
     out = _doctor(runner, mien_cfg, mocker, repo)
     assert "origin (fetch, push)" in out
-    # The remedy must point at the rewrite rule, which is not on the remote.
-    assert "insteadof" in out
+    # The remedy must point at the rewrite rule, which is not on the remote — and
+    # send the user to the editor, since the rule's config key IS the token.
+    assert "git config --global --edit" in out
+    assert "do not list it with" in out
 
 
 def test_doctor_finds_credential_injected_by_pushinsteadof(
@@ -1075,7 +1081,7 @@ def test_doctor_finds_credential_injected_by_pushinsteadof(
                     "https://github.com/"], check=True)
     out = _doctor(runner, mien_cfg, mocker, repo)
     assert "origin (push)" in out
-    assert "insteadof" in out
+    assert "git config --global --edit" in out
 
 
 def test_doctor_silent_on_clean_remotes(runner, mien_cfg, mocker, monkeypatch, tmp_path):
