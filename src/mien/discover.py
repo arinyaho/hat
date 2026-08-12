@@ -24,13 +24,15 @@ from pathlib import Path
 
 from mien.config import Profile
 from mien.resolve import (AmbiguousScope, git_origin_remote, normalize_remote,
-                          resolve_remote_profile)
+                          remote_embeds_credential, resolve_remote_profile)
 
 
 @dataclass(frozen=True)
 class Found:
-    provider: str      # "aws" | "oci" | "gcloud" | "github" | "remote"
-    identifier: str    # profile / config / account name, or a `host/owner` remote owner
+    provider: str      # "aws" | "oci" | "gcloud" | "github" | "remote" | "leak"
+    identifier: str    # profile / config / account name, a `host/owner` remote
+                       # owner, or — for "leak" — the path of a repository whose
+                       # remote carries a credential
     detail: str = ""   # e.g. the account email behind a gcloud config, or a
                        # sample repository remote behind an owner
 
@@ -144,17 +146,30 @@ def discover_remotes(
     reported as owning a whole host.
     """
     owners: dict[str, str] = {}
+    leaks: list[Found] = []
     for root in roots or [Path(os.environ.get("HOME", str(Path.home())))]:
         for repo in _git_repos(Path(root), depth):
             url = origin(str(repo))
             if not url:
                 continue
+            # The walk is already here and the URL is already in hand, so the one
+            # thing no per-repository command can tell you — which of the
+            # repositories on this machine carry a credential — costs nothing to
+            # answer. The repository path is reported; the URL never is.
+            #
+            # ponytail: sees `origin`'s fetch URL only, because that is what the
+            # walk already reads. A push URL or a rewrite rule needs `mien doctor`
+            # in that repository; adding the deeper read here would be two more
+            # subprocesses per repository across the whole home directory.
+            if remote_embeds_credential(url):
+                leaks.append(Found("leak", str(repo)))
             norm = normalize_remote(url)
             parts = norm.split("/")
             if len(parts) < 3:
                 continue
             owners.setdefault("/".join(parts[:2]), norm)
-    return [Found("remote", owner, sample) for owner, sample in sorted(owners.items())]
+    return ([Found("remote", owner, sample) for owner, sample in sorted(owners.items())]
+            + sorted(leaks, key=lambda f: f.identifier))
 
 
 def owner_glob(owner: str) -> str:
@@ -217,14 +232,27 @@ def render_report(found: list[Found], profiles: dict[str, Profile]) -> str:
                 "found. Set an identity up with `mien login`.")
     labels = {"aws": "AWS profiles", "oci": "OCI profiles",
               "gcloud": "gcloud configurations", "github": "GitHub accounts",
-              "remote": "Git remote owners"}
+              "remote": "Git remote owners",
+              "leak": "Remotes carrying a credential"}
     lines: list[str] = []
-    for provider in ("remote", "github", "gcloud", "aws", "oci"):
+    for provider in ("leak", "remote", "github", "gcloud", "aws", "oci"):
         items = [f for f in found if f.provider == provider]
         if not items:
             continue
         bound = _bound_identifiers(profiles, provider)
         lines.append(f"{labels[provider]}:")
+        # An identity you have not imported is a chore; a token sitting in a
+        # remote URL is already leaking, so it leads and it does not offer a
+        # command — the fix depends on where the credential lives, which only a
+        # per-repository check can say.
+        if provider == "leak":
+            for item in items:
+                lines.append(f"  ⚠ {item.identifier}")
+            lines.append("      git acts as that token's owner whatever profile is "
+                         "active, and every command that prints a remote leaks it.")
+            lines.append("      Run `mien doctor` in each for the full check "
+                         "(push URLs and rewrite rules too) and how to strip it.")
+            continue
         for item in items:
             detail = f" ({item.detail})" if item.detail else ""
             if provider == "remote":

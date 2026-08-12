@@ -16,7 +16,9 @@ Everything here is stated against the code. If you find a claim the code does no
 
 **Noticing a credential git stores in cleartext.** A remote URL of the form `https://<user>:<token>@host/…` puts a working token in `.git/config`, where git authenticates as its owner regardless of the active profile and any command that prints a remote — `git remote -v`, `git config --list`, a failed push — copies it into a terminal, a CI log, or an AI session transcript. `mien statusline` shows this ahead of every other identity state, but it only reads `origin`'s fetch URL — a push URL, another remote, or a rewrite rule is `mien doctor`'s job, which names the affected remotes and prints the command to strip them. Both report remote *names* only; the URL is the secret.
 
-*Not protected:* detection is not removal. `mien` never rewrites your remotes, and it only looks at the repository you are standing in — it does not walk the machine. A token already embedded has to be assumed captured and revoked at the provider; stripping the URL afterwards stops the next copy, not the ones already written.
+`mien discover` answers the same question across the machine: it already walks every repository under your home directory to inventory remote owners, so it names the ones whose `origin` carries a credential — paths only, never URLs — and sends you to `mien doctor` in each for the deeper check.
+
+*Not protected:* detection is not removal. `mien` never rewrites your remotes. The sweep sees only each repository's `origin` fetch URL, because that is what the walk already reads; a push URL or a rewrite rule is found by `mien doctor` in that repository, not by the sweep. And a token already embedded has to be assumed captured and revoked at the provider — stripping the URL afterwards stops the next copy, not the ones already written.
 
 **Keeping secret values out of your home directory.** GitHub tokens, Slack tokens, Atlassian and Notion tokens, Google refresh tokens, and AWS keys live in a secrets backend, not in a dotfile. What lands on disk locally is references and identifiers.
 

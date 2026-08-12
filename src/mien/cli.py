@@ -1601,9 +1601,10 @@ def discover_cmd(scan_roots: tuple[str, ...], own: str | None,
     # Only an owner the scan actually found may be claimed, so the glob written is
     # known to match a repository on this machine rather than a typo that matches
     # nothing (or, worse, more than intended).
-    sample = next((f.detail for f in remotes if f.identifier == owner), None)
+    sample = next((f.detail for f in remotes
+                    if f.provider == "remote" and f.identifier == owner), None)
     if sample is None:
-        known = ", ".join(f.identifier for f in remotes) or "none"
+        known = ", ".join(f.identifier for f in remotes if f.provider == "remote") or "none"
         raise click.ClickException(
             f"no repository under the scanned roots has remote owner {owner!r}. "
             f"Owners found: {known}. Point the scan with --scan-root if the "

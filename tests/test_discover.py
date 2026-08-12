@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 from mien.config import AWSService, GitHubService, GoogleService, OCIService, Profile
 from mien.discover import (Found, discover_aws, discover_gcloud, discover_github,
@@ -123,3 +124,41 @@ def test_render_report_marks_owned_remotes_and_offers_the_rest():
 
 def test_owner_glob_claims_the_owner():
     assert owner_glob("GitHub.com/Acme/") == "github.com/acme/*"
+
+
+def test_discover_remotes_flags_a_repository_whose_remote_carries_a_token(tmp_path):
+    """The walk already has every repository's remote in hand, so it can answer
+    the one question no per-repository command can: which repositories on this
+    machine are leaking. The path is reported; the URL never is."""
+    home = tmp_path / "home"
+    urls = dict([
+        _repo(home, "Projects/clean", "https://github.com/acme/clean.git"),
+        _repo(home, "Projects/leaky",
+              "https://x-access-token:SECRETVALUE@github.com/acme/leaky.git"),
+        _repo(home, "Projects/bare",
+              "https://ghp_000000000000000000000000000000000000@github.com/acme/bare"),
+    ])
+    found = discover_remotes([home], origin=urls.get)
+
+    leaks = [f for f in found if f.provider == "leak"]
+    assert [Path(f.identifier).name for f in leaks] == ["bare", "leaky"]
+    assert "SECRETVALUE" not in repr(found)
+    assert "ghp_" not in repr(found)
+    # A leaking repository is still an ordinary repository: its owner is reported
+    # too, from the userinfo-stripped form, so the claim path is unaffected.
+    assert ("remote", "github.com/acme") in [(f.provider, f.identifier) for f in found]
+
+
+def test_render_report_leads_with_a_leaking_remote_and_offers_no_command():
+    """It leads because it is already leaking, and offers no fix command because
+    where the credential lives decides the fix — only `mien doctor` can say."""
+    out = render_report(
+        [Found("remote", "github.com/acme", "github.com/acme/api"),
+         Found("leak", "/home/me/Projects/leaky")],
+        {},
+    )
+    assert out.splitlines()[0] == "Remotes carrying a credential:"
+    assert "/home/me/Projects/leaky" in out
+    assert "mien doctor" in out
+    # never a claim/import hint for a leak, and never a URL
+    assert "mien discover --own" not in out.split("Git remote owners:")[0]
