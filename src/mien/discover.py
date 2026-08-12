@@ -159,7 +159,7 @@ def discover_remotes(
     host or owner at all.
     """
     owners: dict[str, list[str]] = {}
-    leaks: list[Found] = []
+    leaks: set[str] = set()  # overlapping roots reach one repository twice
     for root in roots or [Path(os.environ.get("HOME", str(Path.home())))]:
         for repo in _git_repos(Path(root), depth):
             url = origin(str(repo))
@@ -175,7 +175,7 @@ def discover_remotes(
             # in that repository; adding the deeper read here would be two more
             # subprocesses per repository across the whole home directory.
             if remote_embeds_credential(url):
-                leaks.append(Found("leak", str(repo)))
+                leaks.add(str(repo))
             norm = normalize_remote(url)
             parts = norm.split("/")
             # A local path (`/srv/git/repo`, `file:///srv/git/repo.git`, which
@@ -189,7 +189,7 @@ def discover_remotes(
                 remotes.append(norm)
     return ([Found("remote", owner, norm)
              for owner in sorted(owners) for norm in sorted(owners[owner])]
-            + sorted(leaks, key=lambda f: f.identifier))
+            + [Found("leak", path) for path in sorted(leaks)])
 
 
 def owner_glob(owner: str) -> str:

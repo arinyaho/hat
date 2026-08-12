@@ -180,17 +180,56 @@ def test_git_repos_skips_an_unreadable_directory(tmp_path):
         os.chmod(denied, stat.S_IRWXU)
 
 
+def test_git_repos_skips_an_entry_it_cannot_stat(tmp_path, monkeypatch):
+    """A directory can list fine and still hold a child that raises on stat — a
+    SIP-protected path on macOS does exactly this. The listing succeeds, so the
+    guard around it never sees the denial; the per-entry guard is what keeps the
+    rest of the walk alive."""
+    home = tmp_path / "home"
+    urls = dict([_repo(home, "Projects/api", "https://github.com/acme/api")])
+    # Sorts before the readable repository, so a crash here would hide it too.
+    (home / "Projects" / "aaa-protected").mkdir()
+
+    readable = Path.is_symlink
+
+    def denied(self):
+        if self.name == "aaa-protected":
+            raise PermissionError(1, "Operation not permitted")
+        return readable(self)
+
+    monkeypatch.setattr(Path, "is_symlink", denied)
+    assert [f.identifier for f in discover_remotes([home], origin=urls.get)] == [
+        "github.com/acme"]
+
+
+def test_discover_remotes_reports_one_leak_per_repository_across_roots(tmp_path):
+    """Overlapping scan roots reach the same repository twice; a leak is a
+    property of the repository, so it is reported once, like its owner."""
+    home = tmp_path / "home"
+    urls = dict([
+        _repo(home, "Projects/leaky",
+              "https://x-access-token:SECRETVALUE@github.com/acme/leaky.git"),
+    ])
+    found = discover_remotes([home, home / "Projects"], origin=urls.get)
+
+    assert [f.identifier for f in found if f.provider == "leak"] == [
+        str(home / "Projects" / "leaky")]
+    assert [(f.identifier, f.detail) for f in found if f.provider == "remote"] == [
+        ("github.com/acme", "github.com/acme/leaky")]
+
+
 def test_owner_glob_claims_the_owner():
     assert owner_glob("GitHub.com/Acme/") == "github.com/acme/*"
 
 
-def test_owner_glob_treats_a_metacharacter_in_the_owner_as_data():
+def test_owner_glob_treats_a_metacharacter_in_the_owner_as_data(tmp_path):
     """An owner is read out of a repository's remote URL, so a `*` in it is data,
     not a pattern — escaped, exactly as `resolve._expand_vars` escapes one
     arriving in a variable's value. Unescaped it would claim the whole host."""
     from mien.resolve import resolve_remote_profile
 
-    found = discover_remotes([], origin=lambda p: None) + [
+    # An empty root list means "scan HOME", which would walk the real one.
+    found = discover_remotes([tmp_path], origin=lambda p: None) + [
         Found("remote", "github.com/*", "github.com/*/x")]
     # Reported owner, and a hint that survives a paste into a shell.
     report = render_report(found, {})
