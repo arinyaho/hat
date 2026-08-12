@@ -17,6 +17,7 @@ import glob
 import os
 import re
 import subprocess
+from urllib.parse import urlsplit
 
 from mien.config import Profile
 
@@ -165,28 +166,33 @@ def resolve_profile(profiles: dict[str, Profile], path: str) -> str | None:
     return winners[0]
 
 
-def _split_userinfo(rest: str) -> tuple[str, str]:
-    """Split a post-scheme `userinfo@host/path` into (userinfo, host/path).
+def _authority(url: str) -> tuple[str, str, str] | None:
+    """Split an absolute URL into (userinfo, host, path), or None if malformed.
 
-    Userinfo normally ends at the first `@`, which sits before the first `/`. A
-    password containing an unencoded `/` pushes that `@` past the first `/`, and
-    stopping at the slash would leave a fragment of the credential in the host
-    position — printed as an owner, or written into `owns_remotes`. Such a URL is
-    a mistyped remote (git stores it, but curl reads the authority as `host:port`
-    and rejects it), and it is recognizable by exactly that: an authority that is
-    not a valid `host[:port]`. In that shape the userinfo runs to the last `@`,
-    so the whole of it is stripped. A valid authority is split at its first `@`,
-    which leaves an `@` inside a path alone.
+    `urlsplit` implements RFC 3986, so it gets the shapes a hand-rolled regex
+    keeps getting wrong: userinfo ends at the *last* `@` in the authority (a
+    password containing an `@` is not left behind as a host), a bracketed IPv6
+    literal is a host and not a syntax error, and a port is a port. An `@` after
+    the authority stays in the path.
+
+    None means the authority is not parseable — in practice a password with an
+    unencoded `/`, which truncates the netloc at that slash and leaves a port
+    that is not a number, so `.port` raises. Callers treat that as "strip
+    everything up to the last `@`", since a fragment of a credential must never
+    surface as a host.
+
+    ponytail: a password with an unencoded `/` and no `:`
+    (`https://user/pass@host/a/x`) parses as a valid authority `user` with an
+    `@` in the path, and is indistinguishable from a legitimate `@` in a path.
+    It is neither stripped nor flagged. Percent-encode the password; there is no
+    syntactic fix short of asking the remote.
     """
-    authority = rest.split("/", 1)[0]
-    if "@" in authority:
-        userinfo, _, tail = rest.partition("@")
-        return userinfo, tail
-    if not re.fullmatch(r"[^:@]*(:\d*)?", authority):
-        userinfo, sep, tail = rest.rpartition("@")
-        if sep:
-            return userinfo, tail
-    return "", rest
+    u = urlsplit(url)
+    try:
+        u.port
+    except ValueError:
+        return None
+    return u.netloc.rpartition("@")[0], u.hostname or "", u.path
 
 
 def normalize_remote(url: str) -> str:
@@ -204,10 +210,9 @@ def normalize_remote(url: str) -> str:
     if s.endswith(".git"):
         s = s[:-4]
     if "://" in s:
-        s = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", s)  # drop scheme
-        s = _split_userinfo(s)[1]                          # drop user@
-        s = re.sub(r"^([^/:]+):\d+", r"\1", s)             # drop :port from the host
-                                                           # (e.g. GitHub's ssh.github.com:443)
+        parts = _authority(s)
+        # host + path drops the scheme, any `user@` and any `:port` at once.
+        s = parts[1] + parts[2] if parts else s.partition("://")[2].rpartition("@")[2]
     elif re.match(r"^[^/]+@[^:/]+:", s):                   # scp-like git@host:path
         s = re.sub(r"^[^@]+@", "", s).replace(":", "/", 1)
     return s.rstrip("/").lower()
@@ -241,10 +246,11 @@ def remote_embeds_credential(url: str | None) -> bool:
     """
     if not url:
         return False
-    m = re.match(r"^https?://", url.strip(), re.IGNORECASE)
-    if not m:
+    raw = url.strip()
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
         return False
-    userinfo = _split_userinfo(url.strip()[m.end():])[0]
+    parts = _authority(raw)
+    userinfo = parts[0] if parts else raw.partition("://")[2].rpartition("@")[0]
     if not userinfo:
         return False
     return ":" in userinfo or userinfo.startswith(CREDENTIAL_PREFIXES)

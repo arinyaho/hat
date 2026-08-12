@@ -97,6 +97,19 @@ class TestNormalizeRemote:
         assert normalize_remote("https://github.com/acme/x@v2") == "github.com/acme/x@v2"
         assert normalize_remote("https://host:8080/acme/x@v2") == "host/acme/x@v2"
 
+    def test_an_at_sign_in_the_password_does_not_survive_as_a_host(self):
+        """Splitting the authority at the first `@` would print the owner as
+        `rest@github.com/acme` — a credential fragment, and never the real owner."""
+        norm = normalize_remote("https://user:paSS@rest@github.com/acme/x.git")
+        assert norm == "github.com/acme/x"
+        assert "@" not in norm and "pass" not in norm
+
+    def test_a_bracketed_ipv6_host_is_a_host_and_not_a_malformed_authority(self):
+        # Brackets are stripped and a port dropped, like any other host.
+        assert normalize_remote("https://[::1]/acme/x@v2") == "::1/acme/x@v2"
+        assert normalize_remote("https://[::1]/acme/x.git") == "::1/acme/x"
+        assert normalize_remote("https://[::1]:8443/acme/x") == "::1/acme/x"
+
     def test_a_local_path_is_left_as_a_lowercased_string(self):
         # No host; simply must not crash and must not spuriously match a glob.
         assert normalize_remote("/srv/git/Repo") == "/srv/git/repo"
@@ -471,6 +484,15 @@ class TestRemoteEmbedsCredential:
         """The `/` pushes the `@` past the first slash; reading only as far as
         that slash would call it credential-free and print part of it."""
         assert remote_embeds_credential("https://user:ab/cd@github.com/acme/x.git")
+
+    def test_flags_a_password_containing_an_unencoded_at_sign(self):
+        """Userinfo runs to the *last* `@`; splitting at the first would read
+        `rest@github.com` as the host and call the remote credential-free."""
+        assert remote_embeds_credential("https://user:paSS@rest@github.com/acme/x.git")
+
+    def test_a_bracketed_ipv6_host_is_not_mistaken_for_a_credential(self):
+        assert not remote_embeds_credential("https://[::1]/acme/x@v2")
+        assert not remote_embeds_credential("https://[::1]:8443/acme/x")
 
     def test_a_flagged_remote_still_normalizes_without_the_secret(self):
         """The matching path must never carry the token into a message: an
