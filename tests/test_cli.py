@@ -1016,9 +1016,16 @@ def test_doctor_names_only_the_credentialed_remote(
     out = _doctor(runner, mien_cfg, mocker, repo)
     assert "leaky (fetch" in out
     assert "tidy" not in out
-    # Nothing printed may mutate the repository: a generated command cannot be
-    # right for a rewrite rule it cannot see, and a wrong one destroys config.
-    assert "set-url {}" not in out and "--unset" not in out
+    # Nothing printed may be a runnable command built from this repo's own
+    # remotes: a generated command cannot be right for a rewrite rule it cannot
+    # see, and a wrong one destroys config. Commands stay placeholder prose.
+    for line in out.splitlines():
+        if "git " not in line:
+            continue
+        # No actual remote name or URL interpolated into a command line...
+        assert "leaky" not in line and "github.com" not in line, line
+        # ...and nothing that rewrites config on its own.
+        assert not any(s in line for s in ("$(", "sed ", "--unset")), line
 
 
 def test_doctor_finds_credential_only_on_the_push_side(
