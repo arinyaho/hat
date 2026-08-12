@@ -189,6 +189,15 @@ def normalize_remote(url: str) -> str:
     return s.rstrip("/").lower()
 
 
+# Literal, case-sensitive prefixes of issued tokens. Add a provider here.
+CREDENTIAL_PREFIXES = (
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_",  # GitHub
+    "glpat-",                                               # GitLab
+    "ATAT",                                                 # Atlassian
+    "xox",                                                  # Slack
+)
+
+
 def remote_embeds_credential(url: str | None) -> bool:
     """True if ``url`` carries a secret in its userinfo — `https://user:token@host`.
 
@@ -197,15 +206,21 @@ def remote_embeds_credential(url: str | None) -> bool:
     command that prints a remote (`git remote -v`, `git config --list`, a push
     error) writes the secret into a terminal, a CI log, or an agent transcript.
 
-    Only a *password* component counts. `https://user@host` names a user and
-    prompts for the rest; `git@host:path` and `ssh://git@host/path` are ordinary
-    ssh. Requiring the `:` keeps the check exact — a false positive here would
-    train people to ignore it.
+    A *password* component always counts. A bare userinfo counts only when it
+    looks like a token: `git clone https://$TOKEN@host/...` leaves the secret
+    alone in the userinfo, and git sends it as the Basic username with an empty
+    password — a working credential. A bare `https://username@host` names a user
+    git prompts against, so it is flagged only on a known credential prefix
+    (matched case-sensitively; real usernames do not look like these). A false
+    positive here would train people to ignore the warning.
     """
     if not url:
         return False
     m = re.match(r"^https?://([^/]+)@", url.strip(), re.IGNORECASE)
-    return bool(m and ":" in m.group(1))
+    if not m:
+        return False
+    userinfo = m.group(1)
+    return ":" in userinfo or userinfo.startswith(CREDENTIAL_PREFIXES)
 
 
 def resolve_remote_profile(profiles: dict[str, Profile], remote: str) -> str | None:
