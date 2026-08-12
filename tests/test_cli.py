@@ -2859,3 +2859,189 @@ def test_token_has_no_custom_service(runner, tmp_path, monkeypatch):
     result = CliRunner().invoke(main, ["token", "custom", "--profile", "work"])
     assert result.exit_code != 0
     assert "custom" in result.output  # click's invalid-choice message
+
+
+# --- discover: git remote owners, and claiming one -------------------------
+
+
+def _remote_cfg(tmp_path, monkeypatch, **owns):
+    from mien.config import (BackendConfig, Config, Profile, SecretNaming,
+                             save_config)
+    monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
+    save_config(Config(
+        schema_version=1,
+        secrets_backend=BackendConfig(type="macos_keychain", options={}),
+        bootstrap={},
+        secret_naming=SecretNaming(default=BUILTIN_DEFAULT,
+                                   slack_token=BUILTIN_SLACK_TOKEN),
+        profiles={n: Profile(name=n, owns_remotes=list(pats))
+                  for n, pats in owns.items()},
+    ))
+
+
+def _git_repo(path, url):
+    """A real repository with a real `origin`, so the scan reads git, not a stub."""
+    import subprocess
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", url],
+                   check=True, capture_output=True)
+    return path
+
+
+def test_discover_reports_remote_owners_as_owned_or_unclaimed(
+        runner, tmp_path, monkeypatch):
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/acme-*/*"])
+    home = tmp_path / "home"
+    _git_repo(home / "Projects" / "api", "git@github.com:acme-inc/api.git")
+    _git_repo(home / "Projects" / "blog", "https://github.com/me/blog.git")
+    # The credential half is another machine's business here.
+    monkeypatch.setattr("mien.cli.discover_all", lambda: [])
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home)])
+    assert result.exit_code == 0, result.output
+    assert "✓ github.com/acme-inc — owned by work" in result.output
+    assert "· github.com/me" in result.output and "no profile owns it" in result.output
+    assert "mien discover --own github.com/me --profile <profile>" in result.output
+
+
+def test_discover_own_writes_a_glob_that_actually_claims_the_repo(
+        runner, tmp_path, monkeypatch):
+    from mien.config import load_config
+    from mien.resolve import resolve_remote_profile
+
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/acme-*/*"])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    assert resolve_remote_profile(load_config().profiles, "github.com/me/blog") is None
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "work"])
+    assert result.exit_code == 0, result.output
+    saved = load_config().profiles["work"].owns_remotes
+    assert saved == ["github.com/acme-*/*", "github.com/me/*"]
+    assert resolve_remote_profile(load_config().profiles,
+                                  "git@github.com:me/blog.git") == "work"
+
+
+def test_discover_own_does_not_let_a_star_in_a_remote_claim_the_host(
+        runner, tmp_path, monkeypatch):
+    """A repository's own remote URL must not be able to widen a claim: owning
+    `github.com/*` claims that one owner literally, not everyone on the host."""
+    from mien.config import load_config
+    from mien.resolve import resolve_remote_profile
+
+    _remote_cfg(tmp_path, monkeypatch, work=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "x", "https://github.com/*/x.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/*", "--profile", "work"])
+    assert result.exit_code == 0, result.output
+    profiles = load_config().profiles
+    assert profiles["work"].owns_remotes == ["github.com/[*]/*"]
+    assert resolve_remote_profile(profiles, "https://github.com/*/x.git") == "work"
+    assert resolve_remote_profile(
+        profiles, "git@github.com:unrelated-org/svc.git") is None
+    assert resolve_remote_profile(profiles, "https://github.com/anyone/anything") is None
+
+
+def test_discover_own_refuses_an_owner_no_repo_here_has(
+        runner, tmp_path, monkeypatch):
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/typo", "--profile", "work"])
+    assert result.exit_code != 0
+    assert "github.com/me" in result.output  # tells you what it did find
+    assert load_config().profiles["work"].owns_remotes == []
+
+
+def test_discover_own_refuses_to_claim_another_profiles_owner(
+        runner, tmp_path, monkeypatch):
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/acme-*/*"], personal=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "api", "git@github.com:acme-inc/api.git")
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/acme-inc",
+                                  "--profile", "personal"])
+    assert result.exit_code != 0
+    assert "already owned by 'work'" in result.output
+    assert load_config().profiles["personal"].owns_remotes == []
+
+
+def test_discover_own_refuses_to_split_a_partly_owned_owner(
+        runner, tmp_path, monkeypatch):
+    """One repository owned by another profile is enough to refuse: claiming the
+    rest would leave the owner split between two identities."""
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/me/blog"], personal=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "personal"])
+    assert result.exit_code != 0
+    # Names the other profile and the repository it already owns.
+    assert "already owned by 'work' (github.com/me/blog)" in result.output
+    assert load_config().profiles["personal"].owns_remotes == []
+
+
+def test_discover_own_claims_an_owner_nobody_owns(runner, tmp_path, monkeypatch):
+    from mien.config import load_config
+    _remote_cfg(tmp_path, monkeypatch, work=[], personal=[])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "personal"])
+    assert result.exit_code == 0, result.output
+    assert load_config().profiles["personal"].owns_remotes == ["github.com/me/*"]
+
+
+def test_discover_own_finishes_a_partly_owned_owner(runner, tmp_path, monkeypatch):
+    """Owning one repository of an owner must not dead-end the rest: the report
+    calls that partly owned, and the claim widens it to the whole owner."""
+    from mien.config import load_config
+    from mien.resolve import resolve_remote_profile
+
+    _remote_cfg(tmp_path, monkeypatch, work=["github.com/me/blog"])
+    home = tmp_path / "home"
+    _git_repo(home / "code" / "blog", "git@github.com:me/blog.git")
+    _git_repo(home / "code" / "other", "git@github.com:me/other.git")
+    monkeypatch.setattr("mien.cli.discover_all", lambda: [])
+
+    report = runner.invoke(main, ["discover", "--scan-root", str(home)])
+    assert "~ github.com/me — partly owned by work" in report.output
+    assert "✓ github.com/me" not in report.output
+
+    result = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                  "--own", "github.com/me", "--profile", "work"])
+    assert result.exit_code == 0, result.output
+    profiles = load_config().profiles
+    assert profiles["work"].owns_remotes == ["github.com/me/blog", "github.com/me/*"]
+    assert resolve_remote_profile(profiles, "github.com/me/other") == "work"
+    assert resolve_remote_profile(profiles, "github.com/me/blog") == "work"
+
+    # Now every repository of the owner resolves — the report says so, and a
+    # second claim has nothing left to add.
+    report = runner.invoke(main, ["discover", "--scan-root", str(home)])
+    assert "✓ github.com/me — owned by work" in report.output
+    again = runner.invoke(main, ["discover", "--scan-root", str(home),
+                                 "--own", "github.com/me", "--profile", "work"])
+    assert again.exit_code != 0
+    assert "already owns every repository of github.com/me" in again.output
+
+
+def test_discover_own_needs_a_profile(runner, tmp_path, monkeypatch):
+    _remote_cfg(tmp_path, monkeypatch, work=[])
+    result = runner.invoke(main, ["discover", "--scan-root", str(tmp_path),
+                                  "--own", "github.com/me"])
+    assert result.exit_code != 0
+    assert "--profile" in result.output

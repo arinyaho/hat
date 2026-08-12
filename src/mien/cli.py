@@ -47,12 +47,14 @@ from mien.manifest import (
     push_manifest,
 )
 from mien.oauth import exchange_refresh_token, google_installed_app_flow
-from mien.discover import discover_all, render_report
+from mien.discover import (discover_all, discover_remotes, owner_glob,
+                           render_report)
 from mien.project import (ensure_gitignored, find_declaration, is_allowed,
                           record_allow, write_declaration)
 from mien.resolve import (AmbiguousScope, claimed_profile, git_author_email,
                           git_origin_remote, profile_for_email,
-                          remote_embeds_credential, resolve_profile)
+                          remote_embeds_credential, resolve_profile,
+                          resolve_remote_profile)
 from mien.verify import Status, probe_aws, probe_github, probe_google, run_probe_safely
 from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN, render_name
 from mien.shell import (CAPTURE_MARKER_VARS, custom_vars, emit_unset, emit_use,
@@ -1554,17 +1556,101 @@ def which_cmd() -> None:
 
 
 @main.command("discover")
-def discover_cmd() -> None:
-    """Inventory the identities already on this machine and what to import.
+@click.option("--scan-root", "scan_roots", multiple=True,
+              type=click.Path(file_okay=False),
+              help="Where to look for git repositories (repeatable; "
+                   "default: your home directory, 3 levels down).")
+@click.option("--own", "own", metavar="OWNER",
+              help="Record OWNER (e.g. github.com/acme, as printed by the report) "
+                   "in --profile's owns_remotes. Writes your config.")
+@click.option("--profile", "profile_name", help="The profile --own writes into.")
+def discover_cmd(scan_roots: tuple[str, ...], own: str | None,
+                 profile_name: str | None) -> None:
+    """Inventory the identities and places on this machine, and claim an owner.
 
-    Read-only: it inspects local AWS/OCI profiles, gcloud configurations, and
-    GitHub accounts, and reports which are already bound to a mien profile and
-    which are not — with the `mien login` command to import each. It reads no
-    secret and writes nothing; importing stays an explicit act.
+    Read-only by default: it inspects local AWS/OCI profiles, gcloud
+    configurations and GitHub accounts, and the git remote owners of the
+    repositories under your home directory — reporting which are already bound to
+    a mien profile and which are not, with the command to bind each. It reads no
+    secret and touches no backend.
+
+    `--own OWNER --profile NAME` is the one thing that writes: it adds
+    `OWNER/*` to that profile's `owns_remotes`, which is what the status line,
+    `mien guard` and `mien exec` read to tell whose place a repository is. It is
+    a separate, explicit act because a repository's own signal must never
+    configure identity by merely being looked at.
     """
-    cfg = load_config()
-    profiles = cfg.profiles if cfg else {}
-    click.echo(render_report(discover_all(), profiles))
+    if bool(own) != bool(profile_name):
+        raise click.ClickException(
+            "--own and --profile go together: --own names the remote owner, "
+            "--profile the identity that owns it.")
+
+    roots = [Path(r) for r in scan_roots] or None
+    remotes = discover_remotes(roots)
+
+    if not own:
+        cfg = load_config()
+        click.echo(render_report(discover_all() + remotes,
+                                 cfg.profiles if cfg else {}))
+        return
+
+    cfg = _require_config()
+    if profile_name not in cfg.profiles:
+        raise click.ClickException(f"profile {profile_name!r} not found")
+    owner = own.strip().rstrip("/").lower()
+    # Only an owner the scan actually found may be claimed, so the glob written is
+    # known to match a repository on this machine rather than a typo that matches
+    # nothing (or, worse, more than intended).
+    samples = [f.detail for f in remotes
+               if f.provider == "remote" and f.identifier == owner]
+    if not samples:
+        known = ", ".join(sorted({f.identifier for f in remotes
+                                  if f.provider == "remote"})) or "none"
+        raise click.ClickException(
+            f"no repository under the scanned roots has remote owner {owner!r}. "
+            f"Owners found: {known}. Point the scan with --scan-root if the "
+            f"repositories live elsewhere.")
+
+    # Every repository of the owner, not one sample: a profile can own some of
+    # them and none of the rest. One repository already owned by *another*
+    # profile is enough to refuse — claiming the owner anyway would leave it
+    # split between two identities, with the older, narrower glob silently
+    # winning for the repositories it matches.
+    try:
+        claims = {s: resolve_remote_profile(cfg.profiles, s) for s in samples}
+    except AmbiguousScope as exc:
+        raise click.ClickException(str(exc)) from exc
+    taken = {s: c for s, c in claims.items() if c and c != profile_name}
+    if taken:
+        others = ", ".join(f"{c!r} ({s})" for s, c in sorted(taken.items()))
+        raise click.ClickException(
+            f"{len(taken)} of {len(samples)} repositories of {owner} are "
+            f"already owned by {others}. Two profiles claiming one "
+            f"owner is how identity gets misrouted — edit owns_remotes in "
+            f"{config_path()} if this repository really moved.")
+    unclaimed = [s for s, c in claims.items() if c is None]
+    if not unclaimed:
+        raise click.ClickException(
+            f"{profile_name} already owns every repository of {owner} "
+            f"(owns_remotes: "
+            f"{', '.join(cfg.profiles[profile_name].owns_remotes)}).")
+    # The claim is verified against a repository nothing owned before, so the
+    # check proves the new glob did the work rather than an older, narrower one.
+    sample = unclaimed[0]
+
+    glob = owner_glob(owner)
+    cfg.profiles[profile_name].owns_remotes.append(glob)
+    save_config(cfg)
+
+    # Verify against what is on disk, not against what we just held in memory: the
+    # reload runs the strict parser over the written file, and resolving the sample
+    # proves the glob claims the repositories it was derived from.
+    saved = load_config()
+    if not saved or resolve_remote_profile(saved.profiles, sample) != profile_name:
+        raise click.ClickException(
+            f"wrote {glob} to {profile_name}, but {sample} still does not resolve "
+            f"to it. Check owns_remotes in {config_path()}.")
+    click.echo(f"{profile_name} now owns {glob} — {sample} resolves to {profile_name}.")
 
 
 @main.command("allow")

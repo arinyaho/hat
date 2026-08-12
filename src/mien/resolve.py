@@ -17,6 +17,7 @@ import glob
 import os
 import re
 import subprocess
+from urllib.parse import urlsplit
 
 from mien.config import Profile
 
@@ -165,6 +166,44 @@ def resolve_profile(profiles: dict[str, Profile], path: str) -> str | None:
     return winners[0]
 
 
+def _authority(url: str) -> tuple[str, str, str] | None:
+    """Split an absolute URL into (userinfo, host, path), or None if malformed.
+
+    `urlsplit` implements RFC 3986, so it gets the shapes a hand-rolled regex
+    keeps getting wrong: userinfo ends at the *last* `@` in the authority (a
+    password containing an `@` is not left behind as a host), a bracketed IPv6
+    literal is a host and not a syntax error, and a port is a port. An `@` after
+    the authority stays in the path.
+
+    None means the authority is not parseable. Three shapes reach it, and all
+    three arrive as a `ValueError` the guard below has to catch — a raise that
+    escapes here would abort `mien discover`'s whole sweep, and the NFKC message
+    quotes the netloc, i.e. the credential:
+
+    - a password with an unencoded `/`, which truncates the netloc at that slash
+      and leaves a port that is not a number, so `.port` raises;
+    - a netloc that is not NFKC-stable (`urlsplit`'s `_checknetloc`);
+    - a `]` in the netloc with no `[` — e.g. a password containing `]` —
+      which `urlsplit` rejects as an invalid IPv6 URL.
+
+    The last two raise inside `urlsplit` itself, so the call is inside the
+    `try`. Callers treat None as "strip everything up to the last `@`", since a
+    fragment of a credential must never surface as a host.
+
+    ponytail: a password with an unencoded `/` and no `:`
+    (`https://user/pass@host/a/x`) parses as a valid authority `user` with an
+    `@` in the path, and is indistinguishable from a legitimate `@` in a path.
+    It is neither stripped nor flagged. Percent-encode the password; there is no
+    syntactic fix short of asking the remote.
+    """
+    try:
+        u = urlsplit(url)
+        u.port
+    except ValueError:
+        return None
+    return u.netloc.rpartition("@")[0], u.hostname or "", u.path
+
+
 def normalize_remote(url: str) -> str:
     """Reduce a git remote URL to a canonical, lower-cased ``host/path``.
 
@@ -180,10 +219,9 @@ def normalize_remote(url: str) -> str:
     if s.endswith(".git"):
         s = s[:-4]
     if "://" in s:
-        s = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", s)  # drop scheme
-        s = re.sub(r"^[^/@]+@", "", s)                     # drop user@
-        s = re.sub(r"^([^/:]+):\d+", r"\1", s)             # drop :port from the host
-                                                           # (e.g. GitHub's ssh.github.com:443)
+        parts = _authority(s)
+        # host + path drops the scheme, any `user@` and any `:port` at once.
+        s = parts[1] + parts[2] if parts else s.partition("://")[2].rpartition("@")[2]
     elif re.match(r"^[^/]+@[^:/]+:", s):                   # scp-like git@host:path
         s = re.sub(r"^[^@]+@", "", s).replace(":", "/", 1)
     return s.rstrip("/").lower()
@@ -217,10 +255,13 @@ def remote_embeds_credential(url: str | None) -> bool:
     """
     if not url:
         return False
-    m = re.match(r"^https?://([^/]+)@", url.strip(), re.IGNORECASE)
-    if not m:
+    raw = url.strip()
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
         return False
-    userinfo = m.group(1)
+    parts = _authority(raw)
+    userinfo = parts[0] if parts else raw.partition("://")[2].rpartition("@")[0]
+    if not userinfo:
+        return False
     return ":" in userinfo or userinfo.startswith(CREDENTIAL_PREFIXES)
 
 

@@ -86,6 +86,47 @@ class TestNormalizeRemote:
         assert ":22" not in norm and ":443" not in norm
         assert norm.endswith("/octo/widget")
 
+    def test_an_unencoded_slash_in_the_password_does_not_survive_as_a_host(self):
+        """A mistyped remote git stores but curl rejects: stopping the userinfo
+        at the first `/` would leave `user:ab/cd@github.com` as the owner."""
+        norm = normalize_remote("https://user:ab/cd@github.com/acme/x.git")
+        assert norm == "github.com/acme/x"
+        assert "user" not in norm and "@" not in norm
+
+    def test_an_at_sign_in_the_path_is_not_mistaken_for_userinfo(self):
+        assert normalize_remote("https://github.com/acme/x@v2") == "github.com/acme/x@v2"
+        assert normalize_remote("https://host:8080/acme/x@v2") == "host/acme/x@v2"
+
+    def test_an_at_sign_in_the_password_does_not_survive_as_a_host(self):
+        """Splitting the authority at the first `@` would print the owner as
+        `rest@github.com/acme` — a credential fragment, and never the real owner."""
+        norm = normalize_remote("https://user:paSS@rest@github.com/acme/x.git")
+        assert norm == "github.com/acme/x"
+        assert "@" not in norm and "pass" not in norm
+
+    def test_a_bracketed_ipv6_host_is_a_host_and_not_a_malformed_authority(self):
+        # Brackets are stripped and a port dropped, like any other host.
+        assert normalize_remote("https://[::1]/acme/x@v2") == "::1/acme/x@v2"
+        assert normalize_remote("https://[::1]/acme/x.git") == "::1/acme/x"
+        assert normalize_remote("https://[::1]:8443/acme/x") == "::1/acme/x"
+
+    def test_a_netloc_urlsplit_itself_rejects_is_handled_and_not_raised(self):
+        """`urlsplit` raises *before* `.port` on two shapes, and the NFKC message
+        quotes the netloc — i.e. the token. A raise would abort `mien discover`'s
+        whole sweep and print the credential in the traceback."""
+        for url, host in (
+            # netloc not NFKC-stable
+            ("https://user:ghp_faketoken0000@gith℀ub.com/acme/x.git", "gith℀ub.com"),
+            # `]` with no `[` — "Invalid IPv6 URL"
+            ("https://user:fake]pass@github.com/acme/x.git", "github.com"),
+            # same, with a second `@`: the split must be at the *last* one
+            ("https://user:fake]pass@rest@github.com/acme/x.git", "github.com"),
+        ):
+            norm = normalize_remote(url)
+            assert norm == f"{host}/acme/x"
+            assert "@" not in norm and "user" not in norm and "fake" not in norm
+            assert remote_embeds_credential(url)
+
     def test_a_local_path_is_left_as_a_lowercased_string(self):
         # No host; simply must not crash and must not spuriously match a glob.
         assert normalize_remote("/srv/git/Repo") == "/srv/git/repo"
@@ -455,6 +496,20 @@ class TestRemoteEmbedsCredential:
         assert not remote_embeds_credential("ssh://git@github.com/acme/repo.git")
         assert not remote_embeds_credential(None)
         assert not remote_embeds_credential("")
+
+    def test_flags_a_password_containing_an_unencoded_slash(self):
+        """The `/` pushes the `@` past the first slash; reading only as far as
+        that slash would call it credential-free and print part of it."""
+        assert remote_embeds_credential("https://user:ab/cd@github.com/acme/x.git")
+
+    def test_flags_a_password_containing_an_unencoded_at_sign(self):
+        """Userinfo runs to the *last* `@`; splitting at the first would read
+        `rest@github.com` as the host and call the remote credential-free."""
+        assert remote_embeds_credential("https://user:paSS@rest@github.com/acme/x.git")
+
+    def test_a_bracketed_ipv6_host_is_not_mistaken_for_a_credential(self):
+        assert not remote_embeds_credential("https://[::1]/acme/x@v2")
+        assert not remote_embeds_credential("https://[::1]:8443/acme/x")
 
     def test_a_flagged_remote_still_normalizes_without_the_secret(self):
         """The matching path must never carry the token into a message: an
