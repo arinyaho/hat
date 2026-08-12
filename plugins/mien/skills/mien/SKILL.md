@@ -194,7 +194,7 @@ What each service contributes, when the profile configures it:
 | `google` | `CLOUDSDK_ACTIVE_CONFIG_NAME`; `CLOUDSDK_CORE_PROJECT` when a default project is set; `GOOGLE_APPLICATION_CREDENTIALS` when OAuth credentials are stored | the credentials variable is a **file path**, not a token; a gcloud-only Google identity sets only the `CLOUDSDK_` pair |
 | `notion` | `NOTION_TOKEN` | |
 | `slack` | `MIEN_SLACK_TOKENS` (path to a 0600 JSON map) + `MIEN_SLACK_DEFAULT_TOKEN` when there is exactly one workspace | |
-| `aws` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`; `AWS_DEFAULT_REGION` | |
+| `aws` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` when keys are stored; `AWS_PROFILE` when a profile name is set; `AWS_DEFAULT_REGION` when a region is set | independent, so a profile carrying all three sets all four variables |
 | `oci` | `OCI_CLI_PROFILE`, `OCI_CLI_CONFIG_FILE` | |
 | `custom` | whatever names the user chose | `whoami` lists the names |
 
