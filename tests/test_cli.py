@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -978,6 +979,72 @@ def test_doctor_gc_sweeps(runner, mien_cfg, mocker):
     gc = mocker.patch("mien.cli.EphemeralStore.gc")
     runner.invoke(main, ["doctor", "--gc"])
     gc.assert_called_once()
+
+
+TOKEN = "ghp_" + "0" * 36
+
+
+def _repo(tmp_path, monkeypatch, remotes):
+    """A throwaway git repo with ``remotes`` ({name: url}), isolated from real config."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(tmp_path / "gitconfig-system"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    for name, url in remotes.items():
+        subprocess.run(["git", "-C", str(repo), "remote", "add", name, url], check=True)
+    return repo
+
+
+def test_doctor_names_only_credentialed_remote_and_its_fix_works(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    repo = _repo(tmp_path, monkeypatch, {
+        "clean": "https://github.com/example/clean.git",
+        "leaky": f"https://x-access-token:{TOKEN}@github.com/example/leaky.git",
+    })
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "leaky" in result.output
+    assert "clean" not in result.output
+    assert TOKEN not in result.output
+
+    # The remediation must be a command that actually works, not just a string.
+    fix = next(ln.strip() for ln in result.output.splitlines()
+               if ln.strip().startswith("git remote set-url"))
+    subprocess.run(fix, shell=True, cwd=repo, check=True)
+    url = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "leaky"],
+                         capture_output=True, text=True, check=True).stdout
+    assert TOKEN not in url
+    assert url.strip() == "https://github.com/example/leaky.git"
+
+
+def test_doctor_silent_on_clean_remotes(runner, mien_cfg, mocker, monkeypatch, tmp_path):
+    repo = _repo(tmp_path, monkeypatch, {"origin": "https://github.com/example/clean.git"})
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(repo))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "remotes:" not in result.output
+
+
+def test_doctor_outside_a_repository_does_not_error(
+    runner, mien_cfg, mocker, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    runner.invoke(main, ["init"], input="2\nmien-\n")
+    mocker.patch("mien.cli.load_backend")
+    mocker.patch("mien.cli._logical_cwd", return_value=str(plain))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "remotes:" not in result.output
 
 
 def test_init_rejects_project_name_with_space(runner, mien_cfg):
