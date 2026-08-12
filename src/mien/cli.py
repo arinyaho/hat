@@ -2106,9 +2106,15 @@ def _check_remote_credentials(cwd: str) -> None:
             f"$(git remote get-url {n} | sed -E 's#//[^@/]+@#//#')\n"
             for n in bad
         )
-        + "               git config --global credential.helper "
-        + ("osxkeychain" if sys.platform == "darwin" else "store --file ~/.git-credentials")
-        + "\n             The embedded token stays valid until you revoke it — "
+        + (
+            "               git config --global credential.helper osxkeychain\n"
+            if sys.platform == "darwin"
+            else "               git config --global credential.helper "
+            '"store --file ~/.git-credentials"\n'
+            "             That helper writes the token to a plaintext file — "
+            "prefer a keyring-backed helper if your desktop has one.\n"
+        )
+        + "             The embedded token stays valid until you revoke it — "
         "assume it is in a log and rotate it."
     )
 
