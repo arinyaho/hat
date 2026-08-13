@@ -58,6 +58,21 @@ def test_version_in_sync_across_all_manifests():
     )
 
 
+def test_no_python_dunder_version_outside_the_release_targets():
+    # A `__version__ = "x.y.z"` literal is a sixth version string the release
+    # script does not write, so it silently rots. The CLI reads installed
+    # metadata instead; keep it that way.
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "*.py"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.split("\0")
+    offenders = [
+        path
+        for path in tracked
+        if path and re.search(r'^__version__\s*=', (ROOT / path).read_text(encoding="utf-8"), re.MULTILINE)
+    ]
+    assert not offenders, f"stale version literal(s), delete them: {offenders}"
+
+
 def test_release_version_updates_an_isolated_version_and_all_consumers():
     script = ROOT / "scripts/release_version.py"
     with tempfile.TemporaryDirectory(prefix="mien-version-") as temp_dir:
