@@ -11,33 +11,23 @@ from typing import NamedTuple
 BUILTIN_DEFAULT = "mien-{profile}-{service}-{kind}"
 BUILTIN_SLACK_TOKEN = "mien-{profile}-slack-{workspace}-token"
 
-# The tokens each template is rendered with, and therefore the ones it MUST
-# spend, one secret name per credential. Read off the `render_name` call sites in
-# `mien login`; every one of the three is load-bearing:
+# The tokens each template MUST spend, so that one credential gets one secret
+# name. Every one is load-bearing: `kind` separates two credentials of one
+# service (github `token` from `ssh_key`, google `oauth_client_secret` from
+# `refresh`, and for `--service custom` one variable name from the next, which
+# is all that keeps ANTHROPIC_API_KEY and NPM_TOKEN apart); `service` separates
+# two services on one profile (atlassian's `api_token` from notion's); `profile`
+# separates the identities, without which `work` and `personal` share one github
+# secret; `workspace` separates two Slack workspaces. `slack_token` takes no
+# `service` because the literal "slack" is the template's own text.
 #
-# - `kind` separates two credentials of ONE service on one profile: github's
-#   `token` from its `ssh_key`, google's `oauth_client_secret` from its
-#   `refresh`, aws's `access_key_id` from its `secret_access_key` -- and, for
-#   `--service custom`, one variable name from the next, which is the whole of
-#   what keeps `ANTHROPIC_API_KEY` and `NPM_TOKEN` apart.
-# - `service` separates two services on one profile: atlassian's `api_token`
-#   from notion's, which are the same `kind` under different services.
-# - `profile` separates the identities, which is mien's entire purpose: without
-#   it `work` and `personal` share one github token secret.
-# - `workspace` (slack only) separates two Slack workspaces on one profile.
-#
-# `slack_token` gets no `service` token because the literal "slack" is the
-# template's own job; it is not something mien substitutes.
-#
-# This is also, EXACTLY, the set of tokens each template is SUPPLIED with -- every
-# `render_name(secret_naming.default, ...)` call site passes `profile`, `service`
-# and `kind` and nothing else, and every `render_name(secret_naming.slack_token,
-# ...)` passes `profile` and `workspace` and nothing else. So the two directions
-# of the check in `mien.config._check_secret_name_template` read the same table:
-# a required token the template does not spend collapses two credentials onto one
-# secret, and a field the template asks for that is not in this set has no value
-# to substitute and cannot render at all. If a new call site ever supplies a
-# further token, it belongs here, or every existing config becomes unrenderable.
+# This is EXACTLY the set each template is supplied with — read off the
+# `render_name` call sites in `mien login` — so
+# `_check_secret_name_template` reads it in both directions: a required token
+# the template does not spend collapses two credentials onto one secret, and a
+# field it asks for that is not here cannot render at all. A new call site that
+# supplies a further token belongs here, or every existing config becomes
+# unrenderable.
 REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
     "default": ("profile", "service", "kind"),
     "slack_token": ("profile", "workspace"),

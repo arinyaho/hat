@@ -88,45 +88,26 @@ NON_SECRET_VARS: frozenset[str] = frozenset({
     "ATLASSIAN_BASE_URL",
 })
 
-# Variables a `custom` credential may not be named after, each mapped to what it
-# is — the message quotes the phrase, so a name cannot be listed here without
-# saying why (`mien.config.check_custom_var_name`).
+# Names a `custom` credential may not take, mapped to what each one is — the
+# refusal quotes the phrase, so a name cannot be listed without saying why
+# (`mien.config.check_custom_var_name`). An entry has to break one of two
+# things: (a) `unset`ting it stops the shell or the loader, or (b) exporting a
+# credential over it puts that credential somewhere nobody asked for.
+# `scrub_vars` is the union over every profile, so one such name in one profile
+# strips it in every shell.
 #
-# One rule, in two halves, and an entry has to satisfy at least one: the
-# machinery that carries out `mien use` / `mien unset` READS this variable as an
-# instruction rather than carrying it as payload, so either (a) `unset`ting it
-# stops the shell or the loader from working, or (b) `export`ing a credential
-# over it puts that credential somewhere nobody asked for. The blast radius is
-# what makes the refusal worth having: `scrub_vars` is the union over EVERY
-# profile, so one such name in one profile makes every `mien use` and every
-# `mien-unset`, in every shell, strip it.
-#
-# Deliberately NOT a denylist of POSIX variables. A long list is unmaintainable
-# and would refuse names that are only ever payload; candidates weighed and left
-# off, each for a reason that can be checked:
-#
-# - `PWD`/`OLDPWD`: zsh and bash re-set `PWD` on the next `cd`, so the `unset` is
-#   self-healing, and mien already distrusts the value it finds (`_trusted_cwd`
-#   validates it with `samefile` and falls back to `os.getcwd()`).
-# - `MIEN_GUARD`/`MIEN_EXEC`/`MIEN_TOKEN`: opt-OUTs, matched against a fixed set
-#   of off-values. Unset or overwritten with a credential, both land on "guard
-#   on" — the safe side — so neither half of the rule is met. Note the contrast
-#   with `CAPTURE_MARKER_VARS` below, which are also `MIEN_*`-adjacent signals and
-#   ARE refused: what separates them is polarity, not naming. These three are
-#   read as "is the value one of a fixed set of off-words?", so absence means
-#   enforcing; a capture marker is read as "is anything set?", so absence means
-#   permissive — which is why the scrub's `unset` is harmless here and unsafe
-#   there.
-# - `XDG_CONFIG_HOME`: mien reads it for one non-credential path (the global
-#   gitignore `.mien` goes in), and that write already fails soft on `OSError`.
-# - `LD_PRELOAD`/`DYLD_*`: neither half holds. `unset` does not break the shell,
-#   and exporting a credential leaves the dynamic loader failing to open a
-#   library by that name — it stores no credential anywhere. The remaining
-#   argument, that mien should not be a channel for library injection, is a
-#   security claim this check cannot back: the value comes from the user's own
-#   backend into the user's own shell, granting nothing they could not do with
-#   `export` themselves, and listing them would advertise a sandbox mien does
-#   not implement.
+# Not a POSIX denylist — that would be unmaintainable and would refuse names
+# that are only ever payload. Weighed and left off: PWD/OLDPWD (zsh and bash
+# re-set it on the next `cd`, and `_logical_cwd` revalidates with `samefile` and
+# falls back to `os.getcwd()`); MIEN_GUARD/EXEC/TOKEN (opt-outs matched
+# against fixed off-values, so unset or overwritten both land
+# on "guard on" — the opposite polarity to CAPTURE_MARKER_VARS below, which is
+# read as "is anything set?" and so is refused); XDG_CONFIG_HOME (one
+# non-credential path, the global gitignore `ensure_gitignored` writes, and that
+# write already fails soft); LD_PRELOAD/DYLD_* (neither half holds — `unset`
+# does not break the shell, the loader stores no credential, and "mien should
+# not be an injection channel" is a sandbox claim this check cannot back, granting
+# nothing the user could not do with `export`).
 SHELL_CRITICAL_VARS: dict[str, str] = {
     # (a) The shell finds every program through it — and so does mien's own
     # loader: the `mien-use` wrapper runs `command mien`, and the script it evals
@@ -159,36 +140,24 @@ SHELL_CRITICAL_VARS: dict[str, str] = {
     "MIEN_CONFIG": "where mien reads and writes the config that holds every profile",
 }
 
-# Environment markers that say an agent harness is recording this command's
-# output. Presence means: anything mien writes to stdout may be captured into a
-# transcript that outlives the command — so printing a raw secret there is not a
-# transient exposure but a durable one. `mien token` refuses on it, and
-# `mien exec` refuses a wrong identity on it. The set is a heuristic and
-# deliberately fails *open*: an unrecognized harness is not detected, so this is
-# a backstop for the common case, never a guarantee.
+# Markers that say an agent harness is recording this command's output, mapped
+# to what sets each — the refusal quotes the phrase. Presence means anything on
+# stdout may land in a transcript that outlives the command, so `mien token`
+# refuses to print a secret and `mien exec` refuses a wrong identity. The set is
+# a heuristic and fails *open*: an unrecognized harness is not detected.
 #
-# This is the ONE list of marker names: `mien.cli.capture_context` reads it to
-# detect a harness and `mien.config.check_custom_var_name` reads it to refuse the
-# same names as `custom` credentials. A second copy would let the detection and
-# the refusal drift, and a marker mien detects but does not refuse is a marker
-# the scrub can `unset`.
+# The ONE list of these names: `cli.capture_context` reads it to detect a
+# harness, `config.check_custom_var_name` to refuse the same names as `custom`
+# credentials. A second copy would let the two drift, and a marker mien detects
+# but does not refuse is one `scrub_vars` can `unset`.
 #
-# Refused as a `custom` name for a reason NEXT TO the `SHELL_CRITICAL_VARS` rule
-# rather than inside it, which is why the names live in their own map with their
-# own message: neither half of that rule holds here. `unset CLAUDECODE` breaks no
-# shell and no loader (a), and a credential exported over it leaves the value
-# non-empty — still "detected", the safe side (b). What disqualifies these is a
-# third property: mien reads the variable as a safety SIGNAL whose ABSENCE is the
-# permissive state, so the scrub's `unset` is what moves it to the unsafe side.
-# The blast radius is the same as the other rule's — `scrub_vars` is the union
-# over EVERY profile, so one such name in one profile makes every `mien use` and
-# every `mien-unset`, in every shell, emit `unset CLAUDECODE` — but the damage is
-# quieter: a broken `PATH` is self-evident, while a disarmed refusal shows up only
-# as a secret that gets printed when you expected it to be withheld.
-#
-# Each name maps to what it is, because the refusal quotes the phrase: a marker
-# cannot be added here (or to the detection, which is the same thing) without
-# saying what sets it.
+# They sit in their own map because neither half of the SHELL_CRITICAL_VARS rule
+# holds: `unset CLAUDECODE` breaks nothing, and a credential exported over it
+# still reads as "detected". What disqualifies them is a third property — mien
+# reads the variable as a signal whose ABSENCE is the permissive state, so
+# `scrub_vars`'s `unset` is what moves it to the unsafe side. Same blast radius as the
+# other rule, quieter damage: a broken PATH is self-evident, a disarmed refusal
+# shows up only as a secret printed when you expected it withheld.
 CAPTURE_MARKER_VARS: dict[str, str] = {
     "CLAUDECODE": "the marker Claude Code sets to say an agent, not a person, is driving this shell",
     "CLAUDE_CODE_ENTRYPOINT": "the marker Claude Code sets to name the agent entrypoint that is driving this shell",
