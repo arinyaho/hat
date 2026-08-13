@@ -119,6 +119,22 @@ Claiming an owner is the one thing that writes: `mien discover --own github.com/
 
 See `skills/mien/references/` for full docs.
 
+## What does a profile actually export?
+
+`mien whoami <profile>` answers it without printing a secret:
+
+```
+work — one identity, every provider
+  slack      team-a
+  ...
+  exports    GH_TOKEN (github) · MIEN_SLACK_TOKENS, MIEN_SLACK_DEFAULT_TOKEN (slack) · …
+  unset      AWS_PROFILE — an ambient value survives here
+```
+
+Knowing a profile *has* a slack credential is not the same as knowing it arrives as `$MIEN_SLACK_TOKENS`, and the only command that used to answer the second question — `mien exec <profile> -- env` — is a secret dump, which an agent sandbox blocks. So the answer was reachable only by reading mien's source. The `exports` row closes that; `--json` carries the same as an `env` array for machines.
+
+The `unset` row is the half that bites: `exec` overlays the environment without scrubbing, so a variable mien does *not* set is one another identity's ambient value survives into.
+
 ## Bind a workspace to an identity
 
 The simplest way to say "this workspace is `work`" is to declare it where the work is, with a `.mien` file:

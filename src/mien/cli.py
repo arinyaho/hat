@@ -37,7 +37,7 @@ from mien.config import (
     load_config,
     save_config,
 )
-from mien.env import build_env
+from mien.env import build_env, plan_env
 from mien.handover import refusal_reason
 from mien.manifest import (
     MANIFEST_SECRET_NAME,
@@ -57,7 +57,8 @@ from mien.resolve import (AmbiguousScope, claimed_profile, git_author_email,
                           resolve_remote_profile)
 from mien.verify import Status, probe_aws, probe_github, probe_google, run_probe_safely
 from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN, render_name
-from mien.shell import (CAPTURE_MARKER_VARS, custom_vars, emit_unset, emit_use,
+from mien.shell import (BUILTIN_VARS, CAPTURE_MARKER_VARS, MIEN_INTERNAL_OWNER,
+                        NON_SECRET_VARS, custom_vars, emit_unset, emit_use,
                         render_shell_init)
 from mien.statusline import guard_reason, render_segment
 
@@ -561,25 +562,20 @@ def status_cmd() -> None:
         "listing only mien's built-in variables; a custom variable may be set "
         "in this shell without appearing here, because mien could not read the "
         "config to learn its name"))
-    for var in (
-        "CLOUDSDK_ACTIVE_CONFIG_NAME",
-        "CLOUDSDK_CORE_PROJECT",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GH_TOKEN",
-        "MIEN_SLACK_TOKENS",
-        "AWS_PROFILE",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "OCI_CLI_PROFILE",
-        "OCI_CLI_CONFIG_FILE",
-        "ATLASSIAN_EMAIL",
-        "ATLASSIAN_BASE_URL",
-        "ATLASSIAN_API_TOKEN",
-        "NOTION_TOKEN",
-    ):
+    # Derived from BUILTIN_VARS, never hand-listed: this display used to carry
+    # its own copy of the names and had already drifted — MIEN_SLACK_DEFAULT_TOKEN
+    # was missing, so a single-workspace profile could have it live in the shell
+    # and `status` would not say so. Deriving means a variable is reportable from
+    # the moment it exists.
+    for var, service in BUILTIN_VARS.items():
+        if service == MIEN_INTERNAL_OWNER:  # bookkeeping, not a credential to check
+            continue
         if v := os.environ.get(var):
-            shown = v if var not in ("GH_TOKEN", "AWS_ACCESS_KEY_ID", "ATLASSIAN_API_TOKEN", "NOTION_TOKEN") else "<set>"
-            click.echo(f"  {var}={shown}")
+            # Masked unless positively known to be a selector, a path or an
+            # address. The allowlist fails closed: a variable added later is
+            # masked until someone decides otherwise, not printed until someone
+            # notices.
+            click.echo(f"  {var}={v if var in NON_SECRET_VARS else '<set>'}")
     for var in customs:
         # Always `<set>`, never the value: every custom variable exists to carry
         # a credential, and mien has no way to know which one is harmless.
@@ -614,6 +610,25 @@ def _identity_card(prof: Profile) -> str:
         rows.append(("notion", "configured"))
     if prof.custom:
         rows.append(("custom", ", ".join(prof.custom)))
+    # The bridge from "this profile has slack" to "so call it with
+    # $MIEN_SLACK_TOKENS". Without it the card names every provider and no way
+    # to use one, and the only command that answered — `exec … -- env` — is a
+    # secret dump an agent sandbox blocks, so the honest conclusion from a
+    # blocked dump was that mien does not support slack. Names only; the values
+    # are exactly what this card refuses to print.
+    exports = [p for p in plan_env(prof) if p.set and p.service != MIEN_INTERNAL_OWNER]
+    if exports:
+        by_service: dict[str, list[str]] = {}
+        for p in exports:
+            by_service.setdefault(p.service, []).append(p.var)
+        rows.append(("exports", " · ".join(
+            f"{', '.join(v)} ({s})" for s, v in by_service.items())))
+        # Absence is the answer that matters most: `exec` overlays without
+        # scrubbing, so a variable mien does not set is one another identity's
+        # ambient value survives into.
+        if unset := [p for p in plan_env(prof) if not p.set]:
+            rows.append(("unset", ", ".join(p.var for p in unset)
+                         + " — an ambient value survives here"))
     if prof.owns_remotes:
         rows.append(("owns", ", ".join(prof.owns_remotes)))
     if prof.default_for:
@@ -663,6 +678,15 @@ def whoami_cmd(profile: str | None, live: bool, as_json: bool) -> None:
             # Names, not the map: the values are backend references, and this is
             # the machine-readable form of an identity, not of its storage.
             "custom": list(prof.custom),
+            # What `exec` will actually put in the environment: the one question
+            # the identity fields above cannot answer, and the reason a consumer
+            # otherwise has to grep the package to learn that slack arrives as
+            # MIEN_SLACK_TOKENS. Names, sources and conditions; never a value.
+            "env": [
+                {"var": v.var, "service": v.service, "set": v.set,
+                 **({"note": v.note} if v.note else {})}
+                for v in plan_env(prof)
+            ],
             "owns_remotes": list(prof.owns_remotes),
             "default_for": list(prof.default_for),
         }, indent=2))
@@ -1999,8 +2023,60 @@ def run_cmd(argv: tuple[str, ...]) -> None:
     _run_as_profile(cfg, cfg.profiles[name], argv)
 
 
+# Services `token` deliberately does not mint, and why — printed instead of
+# click's bare "invalid choice", because someone typing `mien token slack` has
+# the right goal and the wrong door, and the useful reply names the door that
+# works. Data rather than prose in a doc, so the reason reaches the one place
+# the reader is actually standing: the error.
+_NO_TOKEN_SUBCOMMAND = {
+    "slack": (
+        "slack has no single token to print: a profile may hold several "
+        "workspaces, and the credential arrives as a workspace \u2192 token map.\n"
+        "  Read it in the child shell, so no value reaches your own:\n"
+        "    mien exec <profile> -- sh -c "
+        "'jq -r --arg w <workspace> \".[$w]\" \"$MIEN_SLACK_TOKENS\"'\n"
+        "  With exactly one workspace, $MIEN_SLACK_DEFAULT_TOKEN is also set.\n"
+        "  `mien whoami <profile>` lists every variable a profile exports."
+    ),
+    "aws": (
+        "aws credentials are not one string: `exec` sets AWS_ACCESS_KEY_ID/"
+        "AWS_SECRET_ACCESS_KEY or AWS_PROFILE, which the CLI and every SDK "
+        "already read.\n    mien exec <profile> -- aws sts get-caller-identity"
+    ),
+    "oci": (
+        "oci is selected, not minted: `exec` sets OCI_CLI_PROFILE / "
+        "OCI_CLI_CONFIG_FILE and the OCI CLI reads them.\n"
+        "    mien exec <profile> -- oci iam user get --user-id <ocid>"
+    ),
+    "github": (
+        "github's token is printable in principle, but `exec` is the safer "
+        "route and sets GH_TOKEN for you.\n"
+        "    mien exec <profile> -- gh api user"
+    ),
+    "custom": (
+        "a custom credential is delivered only through the environment, by "
+        "design \u2014 `exec` is the whole interface.\n"
+        "    mien exec <profile> -- <your command>   # arrives as the name you chose"
+    ),
+}
+
+
+class _TokenService(click.Choice):
+    """`click.Choice` that explains the services it does not accept.
+
+    A bare "invalid choice: slack" sends the reader looking for a different
+    tool; this sends them to `mien exec`, where the credential actually is.
+    Everything else behaves as click's own.
+    """
+
+    def convert(self, value, param, ctx):
+        if reason := _NO_TOKEN_SUBCOMMAND.get(str(value).strip().lower()):
+            self.fail(f"`mien token` does not mint {value!r}.\n  {reason}", param, ctx)
+        return super().convert(value, param, ctx)
+
+
 @main.command("token")
-@click.argument("service", type=click.Choice(["google", "atlassian", "notion"]))
+@click.argument("service", type=_TokenService(["google", "atlassian", "notion"]))
 @click.option(
     "--profile",
     "profile",

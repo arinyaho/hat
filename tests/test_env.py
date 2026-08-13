@@ -15,7 +15,7 @@ from mien.config import (
     Profile,
     SlackWorkspace,
 )
-from mien.env import build_env
+from mien.env import build_env, plan_env
 
 
 @pytest.fixture
@@ -291,3 +291,91 @@ def test_a_custom_variable_is_no_secret_on_disk(monkeypatch, tmp_path):
     bundle = build_env(
         Profile(name="work", custom={"ANTHROPIC_API_KEY": "ref"}), backend, pid=224)
     assert bundle.ephemeral_files == []
+
+
+def _full_profile(**overrides):
+    """A profile carrying every service, so the parity check below covers them all."""
+    base = dict(
+        name="every",
+        google=GoogleService(email="me@example.com", oauth_client_id="cid",
+                             oauth_client_secret_ref="csec-ref",
+                             refresh_token_ref="refresh-ref", adc_ref=None,
+                             gcloud_config_name="every", default_project="proj"),
+        github=GitHubService(username="octo", host="github.com",
+                             token_ref="gh-token-ref", ssh_key_path="/keys/id_ed25519"),
+        slack=[SlackWorkspace(workspace="team-a", user_token_ref="slack-team-a-ref")],
+        aws=AWSService(access_key_id_ref="aws-key-ref", secret_access_key_ref="aws-sec-ref",
+                       profile="work", region="us-west-1"),
+        oci=OCIService(profile="DEFAULT", config_file="/oci/config"),
+        atlassian=AtlassianService(email="me@example.com", api_token_ref="atl-ref",
+                                   base_url="https://example.atlassian.net"),
+        notion=NotionService(api_token_ref="notion-ref"),
+        custom={"ANTHROPIC_API_KEY": "anthropic-ref"},
+    )
+    base.update(overrides)
+    return Profile(**base)
+
+
+@pytest.fixture
+def any_backend():
+    """Returns bytes for any ref: these tests are about which keys appear, not
+    which secret each carries, so the shared fixture's fixed ref map only gets
+    in the way."""
+    b = MagicMock()
+    b.get.side_effect = lambda ref: f"value-for-{ref}".encode()
+    return b
+
+
+class TestPlanEnvMatchesBuildEnv:
+    """`plan_env` mirrors `build_env` without reading a secret, so nothing forces
+    the two to agree except this test. It is the honesty of the mirror: a
+    variable added to `build_env` and forgotten in `plan_env` makes the
+    discovery path quietly lie about what a profile exports."""
+
+    def _keys(self, prof, backend, pid):
+        actual = set(build_env(prof, backend, pid=pid).env)
+        planned = {p.var for p in plan_env(prof) if p.set}
+        return actual, planned
+
+    def test_every_service_agrees(self, monkeypatch, tmp_path, any_backend):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        actual, planned = self._keys(_full_profile(), any_backend, 900)
+        assert actual == planned
+
+    def test_a_bare_profile_agrees(self, monkeypatch, tmp_path, any_backend):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        actual, planned = self._keys(Profile(name="bare"), any_backend, 901)
+        assert actual == planned
+
+    @pytest.mark.parametrize("overrides,absent", [
+        ({"google": GoogleService(email="m@x", oauth_client_id="c",
+                                  oauth_client_secret_ref=None, refresh_token_ref=None,
+                                  adc_ref=None, gcloud_config_name="g",
+                                  default_project=None)},
+         {"GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CORE_PROJECT"}),
+        ({"github": GitHubService(username="o", host="github.com", token_ref=None,
+                                  ssh_key_path="/k")}, {"GH_TOKEN"}),
+        ({"aws": AWSService(access_key_id_ref=None, secret_access_key_ref=None,
+                            profile="work", region=None)},
+         {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION"}),
+        ({"slack": [SlackWorkspace(workspace="team-a", user_token_ref="slack-team-a-ref"),
+                    SlackWorkspace(workspace="team-b", user_token_ref="slack-team-b-ref")]},
+         {"MIEN_SLACK_DEFAULT_TOKEN"}),
+        ({"oci": OCIService(profile=None, config_file=None)},
+         {"OCI_CLI_PROFILE", "OCI_CLI_CONFIG_FILE"}),
+    ])
+    def test_the_conditional_cases_agree(self, monkeypatch, tmp_path, any_backend,
+                                         overrides, absent):
+        """The half that matters: a variable a service *can* set but this profile
+        does not get. `exec` overlays without scrubbing, so those are the ones an
+        ambient value from another identity survives into."""
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        prof = _full_profile(**overrides)
+        actual, planned = self._keys(prof, any_backend, 902)
+        assert actual == planned
+        assert not (absent & actual), f"build_env unexpectedly set {absent & actual}"
+        unset = {p.var for p in plan_env(prof) if not p.set}
+        assert absent <= unset, f"plan_env did not report {absent - unset} as unset"
+        for var in absent:
+            assert next(p.note for p in plan_env(prof) if p.var == var), \
+                f"{var} is unset with no reason given"

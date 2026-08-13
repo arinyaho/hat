@@ -3045,3 +3045,61 @@ def test_discover_own_needs_a_profile(runner, tmp_path, monkeypatch):
                                   "--own", "github.com/me"])
     assert result.exit_code != 0
     assert "--profile" in result.output
+
+
+class TestProfileExportsAreDiscoverable:
+    """The failure this exists to prevent, verbatim: a profile holds a slack
+    credential, `list` and `whoami` say so, and nothing anywhere names the
+    variable it arrives as. The only command that answered — `exec … -- env` —
+    is a secret dump an agent sandbox blocks, so the reasonable conclusion from
+    a blocked dump was that mien does not support slack, and the next hour went
+    into finding a way around a tool that already did the job.
+
+    Both halves are load-bearing. Discoverable, and without a value: a view that
+    leaks the token is one a sandbox blocks again, which puts us back here.
+    """
+
+    def test_the_card_names_the_variable_a_slack_credential_arrives_as(
+            self, runner, tmp_path, monkeypatch):
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        out = runner.invoke(main, ["whoami", "work"]).output
+        assert "slack" in out                      # the fact, as before
+        assert "MIEN_SLACK_TOKENS" in out          # and now the way in
+
+    def test_the_json_form_names_it_with_its_source(self, runner, tmp_path, monkeypatch):
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        env = json.loads(runner.invoke(main, ["whoami", "work", "--json"]).output)["env"]
+        slack = {e["var"]: e for e in env if e["service"] == "slack"}
+        assert slack["MIEN_SLACK_TOKENS"]["set"] is True
+        # one workspace, so the convenience variable is there too
+        assert slack["MIEN_SLACK_DEFAULT_TOKEN"]["set"] is True
+        assert all("value" not in e for e in env)
+
+    def test_a_variable_the_profile_does_not_get_is_reported_as_unset(
+            self, runner, tmp_path, monkeypatch):
+        """The dangerous half: `exec` overlays without scrubbing, so a variable
+        mien does not set is one another identity's ambient value survives into.
+        Silence there reads as "fine"."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        env = json.loads(runner.invoke(main, ["whoami", "work", "--json"]).output)["env"]
+        adc = next(e for e in env if e["var"] == "GOOGLE_APPLICATION_CREDENTIALS")
+        assert adc["set"] is False and adc["note"]
+
+    def test_no_view_prints_a_value(self, runner, tmp_path, monkeypatch):
+        """The discovery path has to survive a policy that blocks secret dumps,
+        so it must never become one."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        for argv in (["whoami", "work"], ["whoami", "work", "--json"], ["list"]):
+            out = runner.invoke(main, argv).output
+            for leak in ("xox", "ghp_", "AKIA", "ntn_", "ATATT"):
+                assert leak not in out, f"{argv} leaked {leak}"
+
+    def test_token_slack_points_at_the_command_that_works(self, runner, tmp_path, monkeypatch):
+        """Typing `mien token slack` is the right goal at the wrong door. A bare
+        "invalid choice" sends the reader looking for another tool."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        result = runner.invoke(main, ["token", "slack", "--profile", "work"])
+        assert result.exit_code != 0
+        assert "MIEN_SLACK_TOKENS" in result.output
+        assert "mien exec" in result.output
+        assert "whoami" in result.output
