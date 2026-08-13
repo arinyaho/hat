@@ -16,43 +16,32 @@ FOOTER = "# <<< mien ambient env <<<"
 ZSHENV_BEGIN = "# >>> mien ambient (zshenv) >>>"
 ZSHENV_END = "# <<< mien ambient (zshenv) <<<"
 
-# Parameters that already hold a NON-EMPTY value at the moment `~/.zshenv` is
-# read, so a scope referring to one expands as written.
+# Parameters already holding a NON-EMPTY value when `~/.zshenv` is read, so a
+# scope referring to one expands as written.
 #
-# The rule: a reference is "expandable" only if zsh itself sets the parameter
-# before it reads any startup file, or EVERY process that can start a zsh which
-# reads `~/.zshenv` puts it in the inherited environment — login(1), launchd,
-# sshd, PAM. Not "some starter supplies it": `~/.zshenv` is read by every zsh,
-# including the non-interactive ones (scripts, `zsh -c`, launchd jobs, cron),
-# and a parameter missing from any of those collapses the scope there.
+# A reference is expandable only if zsh sets the parameter before reading any
+# startup file, or EVERY process that can start such a zsh puts it in the
+# inherited environment — login(1), launchd, sshd, PAM. "Some starter supplies
+# it" is not enough: `~/.zshenv` is read by every zsh including scripts, `zsh
+# -c`, launchd jobs and cron, and a parameter missing from any of those
+# collapses the scope there. So a terminal application does not count, nor does
+# a parent interactive shell — the top-level shell reading `~/.zshenv` inherits
+# nothing, and `~/.zshrc` and `~/.zprofile` have not run yet.
 #
-# That is why a terminal application does not count, and why a parent
-# interactive shell does not either. A child zsh does inherit what its parent
-# exported, but the top-level shell that reads `~/.zshenv` does not, and it is
-# the one the generated script has to be correct for. Everything a user exports
-# from `~/.zshrc` or `~/.zprofile` is unset here, because zsh reads `~/.zshenv`
-# FIRST.
+# A wrong entry is a false negative in the dangerous direction: it suppresses
+# the warning while the scope silently widens and can select credentials
+# everywhere. A missing entry costs one extra warning. So every entry must be
+# verifiable by probing zsh, and anything doubtful stays off — as does anything
+# so common that warning about it teaches users to ignore the warning. Set but
+# empty counts as unset, an empty expansion collapsing the scope exactly like a
+# missing parameter.
 #
-# Keeping the list this narrow is also what makes the warning worth reading:
-# warn about `$HOME` too and users learn to ignore it.
-#
-# Being on this list suppresses the warning, so a wrong entry is a false
-# negative in the dangerous direction — the scope silently widens and can select
-# credentials everywhere. A missing entry only costs one extra warning, so
-# every entry must be verifiable by probing zsh, and anything doubtful stays off.
-# "Set but empty" counts as unset: an empty expansion collapses the scope
-# exactly like a missing parameter. That is why `TTY` is absent — zsh does set
-# it, but to the empty string whenever stdin is not a terminal, which is most
-# shells that read `~/.zshenv` (scripts, `zsh -c`, launchd-started processes).
-#
-# `ZDOTDIR` is absent for two independent reasons: zsh never sets it, and if the
-# user has set it, zsh reads `$ZDOTDIR/.zshenv` rather than the `~/.zshenv` that
-# `ensure_zshenv_sources` wires up — so this code is not running at all.
-# `HOSTNAME` is absent because zsh sets `HOST`, not `HOSTNAME`, and no login
-# path (login(1), launchd, sshd) puts `HOSTNAME` in the environment either.
-#
-# `~` is not on the list because it needs no value: tilde expansion consults the
-# password database, so it survives even an unset HOME.
+# Absent for that reason: TTY (zsh sets it empty whenever stdin is not a
+# terminal, which is most shells reading `~/.zshenv`); ZDOTDIR (zsh never sets
+# it, and if the user did, zsh reads `$ZDOTDIR/.zshenv` and this code is not
+# running); HOSTNAME (zsh sets HOST, and no login path exports HOSTNAME). `~`
+# needs no entry — tilde expansion consults the password database, surviving
+# even an unset HOME.
 ZSHENV_AVAILABLE_VARS = frozenset({
     # set by zsh before any startup file
     "HOME", "PWD", "OLDPWD", "PATH", "SHLVL", "IFS",
@@ -60,18 +49,15 @@ ZSHENV_AVAILABLE_VARS = frozenset({
     "HOST", "LOGNAME", "USERNAME", "OSTYPE", "MACHTYPE", "VENDOR",
     # placed in the inherited environment by login / launchd / sshd
     #
-    # TERM and LANG are deliberately absent: only a terminal application supplies
-    # them. A launchd-started zsh inherits USER/SHELL/HOME/LOGNAME/PATH and neither
-    # of those two, and stock sshd forwards neither, so a `$TERM/...` or
-    # `$LANG/...` scope collapses to `/*` in exactly the non-interactive shells
-    # `~/.zshenv` is read by — the same reason TTY is off the list.
+    # TERM and LANG are absent: only a terminal application supplies them. A
+    # launchd-started zsh inherits USER/SHELL/HOME/LOGNAME/PATH and neither, and
+    # stock sshd forwards neither, so such a scope collapses to `/*` in exactly
+    # the non-interactive shells `~/.zshenv` is read by — as with TTY.
     #
-    # TMPDIR is the same class of hazard, subtler: launchd sets it per-user on
-    # macOS, but stock sshd and a default Linux PAM do not, and mien pins no
-    # platform. Resting an available-guarantee on one OS is exactly the silent
-    # false negative this set exists to avoid — a `$TMPDIR/...` scope would
-    # collapse to `/*` with no warning in a Linux ssh session — so TMPDIR is off
-    # the list and `env sync` warns about it instead.
+    # TMPDIR is subtler: launchd sets it per-user on macOS, but stock sshd and a
+    # default Linux PAM do not, and mien pins no platform. Resting the guarantee
+    # on one OS is the silent false negative this set exists to avoid, so TMPDIR
+    # is off the list and `env sync` warns about it instead.
     "USER", "SHELL",
 })
 

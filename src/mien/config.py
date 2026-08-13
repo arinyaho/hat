@@ -233,67 +233,45 @@ def _config_to_dict(cfg: Config) -> dict:
         profiles[name] = {
             "google": asdict(prof.google) if prof.google else None,
             "github": asdict(prof.github) if prof.github else None,
-            # `"team_id": None` is written deliberately, and is not a live
-            # field — `SlackWorkspace` has not carried one since it was retired,
-            # and nothing here or anywhere else reads it back (loading drops it,
-            # see `_RETIRED_SERVICE_KEYS`). It is a write-side compatibility shim
-            # for OLDER readers of the same config.
+            # A write-side shim for OLDER readers, not a live field:
+            # `SlackWorkspace` has not carried `team_id` since it was retired
+            # and loading drops it (`_RETIRED_SERVICE_KEYS`).
             #
-            # This same JSON is what `mien push` stores as the shared backend
-            # manifest, and the mien that reads it may be an older one on another
-            # machine. In the mien that still had the field, `team_id` was a
-            # required positional with no default, so `SlackWorkspace(**w)` there
-            # raises `TypeError: missing 1 required positional argument` on a
-            # workspace block that has no `team_id` key at all. `mien sync` on
-            # that machine shows the traceback; `mien init` swallows it into
-            # "(manifest check skipped: ...)", exits 0, and leaves the machine
-            # with the empty config init just wrote — every identity gone, almost
-            # silently. Emitting the null keeps those readers working; they treat
-            # it as the value it always had.
+            # This JSON is also what `mien push` stores as the shared manifest,
+            # and the mien reading it may be older. There `team_id` was a
+            # required positional, so `SlackWorkspace(**w)` raises TypeError on
+            # a block without the key: `mien sync` shows the traceback, and
+            # `mien init` swallows it into "(manifest check skipped: ...)",
+            # exits 0, and leaves the empty config it just wrote — every
+            # identity gone, almost silently. The null keeps those readers
+            # working. The two fields retired alongside it need no shim:
+            # `gcloud_login_required` and `git_name` both had defaults.
             #
-            # Drop this line once no mien old enough to require `team_id` can
-            # still read a manifest written here — i.e. every machine sharing a
-            # backend has upgraded past the removal. Nothing in the file itself
-            # will tell you; it is a fact about the fleet.
-            #
-            # The other two fields retired alongside it need no such shim:
-            # `GoogleService.gcloud_login_required` and `Profile.git_name` both
-            # had defaults, so an older mien constructs them fine when the key is
-            # absent.
+            # Drop this once every machine sharing a backend has upgraded past
+            # the removal. Nothing in the file will tell you; it is a fact about
+            # the fleet.
             "slack": [{**asdict(w), "team_id": None} for w in prof.slack],
             "aws": asdict(prof.aws) if prof.aws else None,
             "oci": asdict(prof.oci) if prof.oci else None,
             "atlassian": asdict(prof.atlassian) if prof.atlassian else None,
             "notion": asdict(prof.notion) if prof.notion else None,
-            # `custom` is written only when it carries something, and the
-            # omission is deliberate — like the `team_id` null above, it is a
-            # write-side compatibility shim for OLDER readers of this same JSON.
+            # Written only when non-empty — the same write-side shim as the
+            # `team_id` null above. A mien predating this field rejects unknown
+            # profile keys hard, and that ConfigError takes the WHOLE manifest
+            # down, not the one profile carrying the key: `mien sync` fails,
+            # `mien init` swallows it and leaves the empty config it just wrote,
+            # and the remedy that failure prints is `mien push` — which uploads
+            # that machine's custom-less config, emptying every profile's map
+            # for everyone who syncs next.
             #
-            # A mien predating this field rejects unknown *profile* keys hard
-            # ("profile 'plain': unknown key 'custom'"), and that ConfigError
-            # takes the WHOLE manifest down rather than the one profile carrying
-            # the key. Writing `"custom": {}` unconditionally would therefore
-            # cost such a machine every identity it has over a profile that uses
-            # nothing new: `mien sync` fails outright, and `mien init` swallows
-            # it into "(manifest check skipped: ...)", exits 0, and leaves the
-            # empty config it just wrote. Worse, the remedy that failure prints
-            # is `mien push` — which from that machine uploads its own
-            # custom-less config, emptying every profile's `custom` map for
-            # everyone who syncs next.
-            #
-            # Be honest about the shim's reach: it cannot make a profile that
-            # actually uses `custom` readable by a mien that has no such field.
-            # What it buys is that the break stops being fleet-wide the moment
-            # anyone upgrades and becomes confined to the profiles using the
-            # feature.
-            #
+            # It cannot make a profile that USES `custom` readable by a mien
+            # without the field. What it buys is that the break stops being
+            # fleet-wide and is confined to the profiles using the feature.
             # Costless for current readers: `Profile.custom` has a
-            # default_factory and the schema documents an absent key as an empty
-            # map, so the key's absence says exactly what `{}` said.
+            # default_factory and the schema documents an absent key as `{}`.
             #
-            # Drop this once no mien predating `custom` can still read a manifest
-            # written here. As with `team_id`, nothing in the file will tell you;
-            # it is a fact about the fleet.
+            # Drop this once no mien predating `custom` reads a manifest written
+            # here — again, a fact about the fleet, not the file.
             **({"custom": dict(prof.custom)} if prof.custom else {}),
             "project_env": [asdict(s) for s in prof.project_env],
             "default_for": list(prof.default_for),
@@ -1095,27 +1073,22 @@ def _config_from_dict(raw: dict) -> Config:
             "secrets_backend.type is missing — mien cannot tell where your "
             "secrets live. Expected one of: gcp_secret_manager, macos_keychain, "
             "keyring.")
-    # `type` was the one leaf that never reached `_check_leaf_values`: popped out
-    # of the block and handed straight to `BackendConfig`, whatever it held. A
-    # non-string one then escaped `ensure_known_backend_options`'s
-    # `BACKEND_OPTIONS.get(cfg.type)` as a bare `TypeError: unhashable type:
-    # 'list'` — out of `deserialize_config`, which every surface calls, so `mien
-    # guard` exited 0 with both streams empty and waved through the very
-    # mis-identity commit it exists to block. Checked here, against the same
-    # annotation as every other leaf, so the answer cannot drift from
-    # `BackendConfig.type: str`, and so nothing downstream ever sees a `type` that
-    # is not a string. `scalars_only` skips `options`, which is this block's
-    # remaining keys rather than a key of its own.
+    # `type` was the one leaf that never reached `_check_leaf_values`: popped
+    # out of the block and handed straight to `BackendConfig`, whatever it held.
+    # A non-string one escaped `ensure_known_backend_options` as a bare
+    # `TypeError: unhashable type: 'list'` out of `deserialize_config`, which
+    # every surface calls — so `mien guard` exited 0 with both streams empty and
+    # waved through the mis-identity commit it exists to block. Checked here
+    # against the same annotation as every other leaf, so it cannot drift from
+    # `BackendConfig.type: str`. `scalars_only` skips `options`.
     #
-    # This is the TYPE check only. A `type` that is a string but not a backend
-    # mien has (`"keychain"`, the retired `"oci_vault"`) still belongs to
-    # `ensure_known_backend`, which has the migration story and is deliberately
-    # deferred to the first command that reaches for the backend. `null` and `5`
-    # are rejected here with the other wrong types rather than left to that
-    # check: they are not backend names, so "unknown secrets backend 5" would
-    # send the reader looking for a backend called 5 instead of telling them the
-    # value is the wrong shape — and splitting them off would make the
-    # user-visible contract depend on whether a value happens to be hashable.
+    # TYPE only. A string that is not a backend mien has ("keychain", the
+    # retired "oci_vault") belongs to `ensure_known_backend`, which carries the
+    # migration story and is deferred to the first command reaching for the
+    # backend. `null` and `5` are rejected here instead, because "unknown
+    # secrets backend 5" would send the reader looking for a backend called 5,
+    # and splitting them off would make the user-visible contract depend on
+    # whether a value happens to be hashable.
     _check_leaf_values("secrets_backend", sb_raw, BackendConfig, scalars_only=True)
     sb_type = sb_raw.pop("type")
     secrets_backend = BackendConfig(type=sb_type, options=sb_raw)
