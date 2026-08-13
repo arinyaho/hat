@@ -63,7 +63,7 @@ $MIEN discover                      # inventory local AWS/OCI/gcloud/GitHub iden
 $MIEN discover --own <host/owner> --profile <p>   # record that owner in the profile's owns_remotes (the only writing form)
 $MIEN list                          # see profiles
 $MIEN status                        # what is active in *this* shell
-$MIEN whoami [<profile>]            # the whole bundled identity as a card; --json for machine form; --live to verify
+$MIEN whoami [<profile>]            # the identity AND the env vars it exports (names only); --json for machine form; --live to verify
 $MIEN use <profile>                 # prints a `source …; rm …` loader; eval to activate (same call only)
 $MIEN exec <profile> -- <cmd...>    # run cmd with the profile's env — prefer this; refuses a profile this place disowns
 $MIEN which                         # profile claimed by the current directory
@@ -178,6 +178,8 @@ $MIEN whoami <profile>
 
 That card is built from the profile's configuration, so it is the authority on which services this profile actually carries — and it already prints the values you would otherwise guess: the Atlassian site URL and account email, the GitHub username, the Google address, the Slack workspaces, the AWS profile and region, the names of any custom variables.
 
+It also answers the question the service list alone cannot: **which environment variable each credential arrives as.** The `exports` row names them, grouped by service, and the `unset` and `no creds` rows name the ones this profile does *not* set — the dangerous half, since `exec` overlays without scrubbing and another identity's ambient value survives there. `unset` is a configured service whose variable is conditional; `no creds` is a service the profile has no credential for at all, so every one of its variables is inherited. The one exception gets its own `stripped` row: `mien` removes any ambient `GOOGLE_APPLICATION_CREDENTIALS` on every invocation, so when it is unset it arrives empty rather than inherited, and a client library falls back to the machine's own ADC file. `$MIEN whoami <profile> --json` carries the same thing as an `env` array of `{var, service, set, configured, note}`, which is the form to parse. Neither prints a value, so both work where a policy blocks a secret dump. Do not conclude a service is unsupported because you cannot find its variable — read this row first; that mistake has cost hours.
+
 Do not use an `env` dump for that question. `exec` merges the profile's variables *over* the ambient environment rather than replacing it, so an inherited `ATLASSIAN_BASE_URL` or `GH_TOKEN` from another identity prints exactly like one the profile set. Reading a single variable under `exec` is fine once `whoami` has told you the profile carries that service:
 
 ```bash
@@ -223,6 +225,8 @@ $MIEN exec work-foo -- sh -c 'TOKEN=$(jq -r ".\"team-a\"" "$MIEN_SLACK_TOKENS");
 ```
 
 If the profile has only one workspace, `$MIEN_SLACK_DEFAULT_TOKEN` is also exported.
+
+There is deliberately no `mien token slack`: a profile may hold several workspaces, so there is no single "the token" to print — the credential is a map, and `exec` is the interface. Asking for one says so and points here rather than failing with a bare "invalid choice". The same holds for `aws`, `oci`, `github` and `custom` — each names the `exec` form that works.
 
 For Atlassian (Jira/Confluence):
 

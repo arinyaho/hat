@@ -42,6 +42,36 @@ def test_status_active(runner, mien_cfg, monkeypatch):
     assert "personal" in result.output
 
 
+def test_status_prints_a_value_only_for_the_pinned_non_secret_vars(
+        runner, mien_cfg, monkeypatch):
+    """`status` masks on an allowlist, so the allowlist is the security boundary.
+
+    Every built-in set to a marker; the marker may appear only for the names
+    spelled out here. Adding a secret-bearing name to `NON_SECRET_VARS` — say
+    `AWS_SECRET_ACCESS_KEY` — makes `status` print it verbatim and fails here.
+    """
+    from mien.env import BUILTIN_VARS, MIEN_INTERNAL_OWNER
+    for var in BUILTIN_VARS:
+        monkeypatch.setenv(var, "MARKER-" + var)
+    monkeypatch.setenv("MIEN_PROFILE", "personal")
+    out = runner.invoke(main, ["status"]).output
+    visible = {ln.split("=", 1)[0].strip() for ln in out.splitlines()
+               if "=MARKER-" in ln}
+    assert visible == {
+        "CLOUDSDK_ACTIVE_CONFIG_NAME", "CLOUDSDK_CORE_PROJECT",
+        "GIT_SSH_COMMAND", "MIEN_SLACK_TOKENS", "AWS_PROFILE",
+        "AWS_DEFAULT_REGION", "OCI_CLI_PROFILE", "OCI_CLI_CONFIG_FILE",
+        "ATLASSIAN_EMAIL", "ATLASSIAN_BASE_URL",
+    }
+    # GOOGLE_APPLICATION_CREDENTIALS is allowlisted but never reaches this
+    # display: `main()` pops it from the environment on every invocation.
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in out
+    # Everything else this display reaches is masked.
+    masked = {v for v, s in BUILTIN_VARS.items()
+              if s != MIEN_INTERNAL_OWNER} - visible - {"GOOGLE_APPLICATION_CREDENTIALS"}
+    assert all(f"  {v}=<set>" in out for v in masked)
+
+
 def test_init_writes_keychain_skeleton(runner, mien_cfg):
     result = runner.invoke(main, ["init"], input="2\nmien-\n")
     assert result.exit_code == 0, result.output
@@ -119,8 +149,42 @@ def test_whoami_card_omits_absent_providers(runner, tmp_path, monkeypatch):
     result = runner.invoke(main, ["whoami", "solo"])
     assert result.exit_code == 0
     assert "github" in result.output and "octocat" in result.output
-    # No google/aws/slack lines for a profile that doesn't have them.
-    assert "google" not in result.output and "aws" not in result.output
+    # No google/aws/slack *identity* line for a profile that doesn't have them —
+    # they appear only in the `no creds` warning, which is the point of that row.
+    identity = [ln for ln in result.output.splitlines()
+                if "no creds" not in ln and "stripped" not in ln]
+    assert not any("google" in ln or "aws" in ln for ln in identity)
+
+
+def test_whoami_names_the_variables_of_a_service_the_profile_lacks(
+        runner, tmp_path, monkeypatch):
+    """The silent case: `exec` overlays without scrubbing, so a service this
+    profile has no credential for is fully ambient — an ambient GH_TOKEN acts as
+    another identity. The card and the JSON both have to say so."""
+    from mien.config import (BackendConfig, Config, NotionService, Profile,
+                             SecretNaming, save_config)
+    monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
+    save_config(Config(
+        schema_version=1,
+        secrets_backend=BackendConfig(type="macos_keychain", options={}),
+        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT,
+                                                 slack_token=BUILTIN_SLACK_TOKEN),
+        profiles={"noted": Profile(name="noted",
+                                   notion=NotionService(api_token_ref="n"))},
+    ))
+    card = runner.invoke(main, ["whoami", "noted"])
+    assert card.exit_code == 0
+    (row,) = [ln for ln in card.output.splitlines() if "no creds" in ln]
+    assert "github (GH_TOKEN, GIT_SSH_COMMAND)" in row
+    assert "ambient" in row
+
+    out = runner.invoke(main, ["whoami", "noted", "--json"])
+    assert out.exit_code == 0
+    env = {v["var"]: v for v in json.loads(out.output)["env"]}
+    assert env["GH_TOKEN"] == {"var": "GH_TOKEN", "service": "github",
+                               "set": False, "configured": False,
+                               "note": "this profile configures no github"}
+    assert env["NOTION_TOKEN"]["set"] and env["NOTION_TOKEN"]["configured"]
 
 
 def test_whoami_json_flag_still_emits_machine_readable(runner, tmp_path, monkeypatch):
@@ -3045,3 +3109,66 @@ def test_discover_own_needs_a_profile(runner, tmp_path, monkeypatch):
                                   "--own", "github.com/me"])
     assert result.exit_code != 0
     assert "--profile" in result.output
+
+
+class TestProfileExportsAreDiscoverable:
+    """The failure this exists to prevent, verbatim: a profile holds a slack
+    credential, `list` and `whoami` say so, and nothing anywhere names the
+    variable it arrives as. The only command that answered — `exec … -- env` —
+    is a secret dump an agent sandbox blocks, so the reasonable conclusion from
+    a blocked dump was that mien does not support slack, and the next hour went
+    into finding a way around a tool that already did the job.
+
+    Both halves are load-bearing. Discoverable, and without a value: a view that
+    leaks the token is one a sandbox blocks again, which puts us back here.
+    """
+
+    def test_the_card_names_the_variable_a_slack_credential_arrives_as(
+            self, runner, tmp_path, monkeypatch):
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        out = runner.invoke(main, ["whoami", "work"]).output
+        assert "slack" in out                      # the fact, as before
+        assert "MIEN_SLACK_TOKENS" in out          # and now the way in
+
+    def test_the_json_form_names_it_with_its_source(self, runner, tmp_path, monkeypatch):
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        env = json.loads(runner.invoke(main, ["whoami", "work", "--json"]).output)["env"]
+        slack = {e["var"]: e for e in env if e["service"] == "slack"}
+        assert slack["MIEN_SLACK_TOKENS"]["set"] is True
+        # one workspace, so the convenience variable is there too
+        assert slack["MIEN_SLACK_DEFAULT_TOKEN"]["set"] is True
+        assert all("value" not in e for e in env)
+
+    def test_a_variable_the_profile_does_not_get_is_reported_as_unset(
+            self, runner, tmp_path, monkeypatch):
+        """The dangerous half: `exec` overlays without scrubbing, so a variable
+        mien does not set is one another identity's ambient value survives into.
+        Silence there reads as "fine"."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        env = json.loads(runner.invoke(main, ["whoami", "work", "--json"]).output)["env"]
+        adc = next(e for e in env if e["var"] == "GOOGLE_APPLICATION_CREDENTIALS")
+        assert adc["set"] is False and adc["note"]
+
+    def test_no_view_prints_a_value(self, runner, tmp_path, monkeypatch, mocker):
+        """The discovery path has to survive a policy that blocks secret dumps,
+        so it must never become one. The backend hands out obviously
+        secret-shaped values to anything that asks, so a view that resolves one
+        prints it — and asking at all is itself the failure."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        backend = mocker.patch("mien.cli.load_backend").return_value
+        backend.get.return_value = b"xoxp-111-222-deadbeef"
+        for argv in (["whoami", "work"], ["whoami", "work", "--json"], ["list"]):
+            out = runner.invoke(main, argv).output
+            for leak in ("xox", "ghp_", "AKIA", "ntn_", "ATATT"):
+                assert leak not in out, f"{argv} leaked {leak}"
+            backend.get.assert_not_called()
+
+    def test_token_slack_points_at_the_command_that_works(self, runner, tmp_path, monkeypatch):
+        """Typing `mien token slack` is the right goal at the wrong door. A bare
+        "invalid choice" sends the reader looking for another tool."""
+        _rich_profile_cfg(tmp_path, monkeypatch)
+        result = runner.invoke(main, ["token", "slack", "--profile", "work"])
+        assert result.exit_code != 0
+        assert "MIEN_SLACK_TOKENS" in result.output
+        assert "mien exec" in result.output
+        assert "whoami" in result.output

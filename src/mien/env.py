@@ -17,6 +17,168 @@ class EnvBundle:
     ephemeral_files: list[Path] = field(default_factory=list)
 
 
+# What `plan_env`/`BUILTIN_VARS` say instead of a service name for mien's own
+# bookkeeping variables. Defined here, where those variables are set, and
+# re-exported by `mien.shell`, so the card, the scrub and the collision message
+# all use one spelling — the display filters on it, and a second spelling would
+# put MIEN_PROFILE in the list of credentials a profile exports.
+MIEN_INTERNAL_OWNER = "mien itself"
+
+# Every environment variable a built-in service puts in the environment, and the
+# service that owns it. A map rather than a bare list because three readers need
+# the owner: the collision check that refuses a `custom` variable named after a
+# built-in has to say which service it would fight (`mien.config`), `plan_env`
+# has to name the variables of a service this profile does not configure, and
+# nothing else tells you that `GIT_SSH_COMMAND` is github's. Re-exported by
+# `mien.shell`, which derives the scrub list from it.
+BUILTIN_VARS: dict[str, str] = {
+    "MIEN_PROFILE": MIEN_INTERNAL_OWNER,
+    "MIEN_EPHEMERAL_DIR": MIEN_INTERNAL_OWNER,
+    "CLOUDSDK_ACTIVE_CONFIG_NAME": "google",
+    "CLOUDSDK_CORE_PROJECT": "google",
+    "GOOGLE_APPLICATION_CREDENTIALS": "google",
+    "GH_TOKEN": "github",
+    "MIEN_SLACK_TOKENS": "slack",
+    "MIEN_SLACK_DEFAULT_TOKEN": "slack",
+    "AWS_PROFILE": "aws",
+    "AWS_DEFAULT_REGION": "aws",
+    "AWS_ACCESS_KEY_ID": "aws",
+    "AWS_SECRET_ACCESS_KEY": "aws",
+    "OCI_CLI_PROFILE": "oci",
+    "OCI_CLI_CONFIG_FILE": "oci",
+    "ATLASSIAN_EMAIL": "atlassian",
+    "ATLASSIAN_API_TOKEN": "atlassian",
+    "ATLASSIAN_BASE_URL": "atlassian",
+    "NOTION_TOKEN": "notion",
+    "GIT_SSH_COMMAND": "github",
+}
+
+
+# The one built-in whose absence is NOT an ambient inheritance: `cli.main()` pops
+# it from `os.environ` on every invocation, so it is already gone from the parent
+# environment `exec` overlays and the child gets nothing. Named here so the
+# identity card does not lump it in with the variables an ambient value survives
+# into — the opposite of the truth, in a security-facing row.
+STRIPPED_VAR = "GOOGLE_APPLICATION_CREDENTIALS"
+
+
+@dataclass(frozen=True)
+class PlannedVar:
+    """One variable `build_env` would set, named without being valued."""
+
+    var: str
+    service: str
+    set: bool
+    note: str = ""
+    # False when the profile has no such service at all, as opposed to a
+    # configured service whose variable is conditional. Both are ambient under
+    # `exec`, but the remedies differ: add the credential, versus fill in the
+    # field the service is missing.
+    configured: bool = True
+
+
+def plan_env(profile: Profile) -> list[PlannedVar]:
+    """Which variables `build_env` would set for ``profile``, and which it would not.
+
+    The question `mien exec <profile> -- env` answers, without the secret dump
+    that makes that command unusable under an agent sandbox — and therefore the
+    only way to discover that, say, a slack credential arrives as
+    `MIEN_SLACK_TOKENS`. Names, sources and conditions only; no value is read,
+    so this touches no backend and runs wherever a profile name is known.
+
+    Every variable a service *can* set is listed, including the ones this
+    profile will not get, because "absent" is the answer that matters most: the
+    overlay in `_run_as_profile` never scrubs, so a variable mien does not set
+    is one an ambient value from another identity survives into.
+
+    This mirrors `build_env` rather than sharing code with it — `build_env`
+    reads secrets and this must not. `TestPlanEnvMatchesBuildEnv` asserts the
+    two agree on the exact key set, which is the only thing keeping the mirror
+    honest; treat that test as part of this function.
+    """
+    g, gh, aws, oci = profile.google, profile.github, profile.aws, profile.oci
+    plan = [
+        PlannedVar("MIEN_PROFILE", MIEN_INTERNAL_OWNER, True),
+        PlannedVar("MIEN_EPHEMERAL_DIR", MIEN_INTERNAL_OWNER, True),
+    ]
+    if g:
+        adc = bool(g.refresh_token_ref and g.oauth_client_secret_ref)
+        plan += [
+            PlannedVar("CLOUDSDK_ACTIVE_CONFIG_NAME", "google", True),
+            PlannedVar("CLOUDSDK_CORE_PROJECT", "google", bool(g.default_project),
+                       "" if g.default_project else "no default project on this profile"),
+            PlannedVar("GOOGLE_APPLICATION_CREDENTIALS", "google", adc,
+                       "an ADC file path, not a token" if adc else
+                       "no stored OAuth credentials — a gcloud login alone produces no "
+                       "ADC file; mien strips this variable rather than inheriting it, "
+                       "so a client library falls back to the machine's ambient ADC"),
+        ]
+    if gh:
+        key = bool(gh.ssh_key_ref or gh.ssh_key_path)
+        plan += [
+            PlannedVar("GH_TOKEN", "github", bool(gh.token_ref),
+                       "" if gh.token_ref else "no token stored — `gh` keeps whatever "
+                                               "ambient token the overlay left in place"),
+            PlannedVar("GIT_SSH_COMMAND", "github", key,
+                       "" if key else "no SSH key configured"),
+        ]
+    if profile.slack:
+        # By workspace name, because `build_env` keys its token map by name and
+        # so counts the deduped set, not the entries.
+        one = len({w.workspace for w in profile.slack}) == 1
+        plan += [
+            PlannedVar("MIEN_SLACK_TOKENS", "slack", True,
+                       "path to a 0600 JSON map of workspace → token"),
+            PlannedVar("MIEN_SLACK_DEFAULT_TOKEN", "slack", one,
+                       "" if one else "only with exactly one workspace; this profile "
+                                      f"has {len(profile.slack)}"),
+        ]
+    if aws:
+        keys = bool(aws.access_key_id_ref and aws.secret_access_key_ref)
+        plan += [
+            PlannedVar("AWS_ACCESS_KEY_ID", "aws", keys,
+                       "" if keys else "this profile stores no access key"),
+            PlannedVar("AWS_SECRET_ACCESS_KEY", "aws", keys,
+                       "" if keys else "this profile stores no access key"),
+            PlannedVar("AWS_PROFILE", "aws", bool(aws.profile),
+                       "" if aws.profile else "no named AWS profile on this profile"),
+            PlannedVar("AWS_DEFAULT_REGION", "aws", bool(aws.region),
+                       "" if aws.region else "no region on this profile"),
+        ]
+    if oci:
+        plan += [
+            PlannedVar("OCI_CLI_PROFILE", "oci", bool(oci.profile),
+                       "" if oci.profile else "no OCI profile name set"),
+            PlannedVar("OCI_CLI_CONFIG_FILE", "oci", bool(oci.config_file),
+                       "" if oci.config_file else "no OCI config file set"),
+        ]
+    if profile.atlassian:
+        plan += [
+            PlannedVar("ATLASSIAN_EMAIL", "atlassian", True),
+            PlannedVar("ATLASSIAN_API_TOKEN", "atlassian", True),
+            PlannedVar("ATLASSIAN_BASE_URL", "atlassian", True, "the site to call"),
+        ]
+    if profile.notion:
+        plan.append(PlannedVar("NOTION_TOKEN", "notion", True))
+    for var in profile.custom:
+        plan.append(PlannedVar(var, "custom", True, "a credential of your own"))
+    # And every built-in belonging to a service this profile does not configure
+    # at all — the worst case, and the one the blocks above are structurally
+    # blind to: not one conditional variable missing but a whole service
+    # ambient, so `gh` under `exec` acts as whoever the parent environment was.
+    named = {p.var for p in plan}
+    plan += [
+        PlannedVar(var, service, False,
+                   f"this profile configures no {service}"
+                   + ("; mien strips this variable rather than inheriting it"
+                      if var == STRIPPED_VAR else ""),
+                   configured=False)
+        for var, service in BUILTIN_VARS.items()
+        if var not in named and service != MIEN_INTERNAL_OWNER
+    ]
+    return plan
+
+
 def build_env(profile: Profile, backend: SecretsBackend, *, pid: int | None = None) -> EnvBundle:
     pid = pid if pid is not None else os.getpid()
     store = EphemeralStore(pid=pid)

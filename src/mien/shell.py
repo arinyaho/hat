@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from mien.config import Profile
-from mien.env import EnvBundle
+from mien.env import BUILTIN_VARS, MIEN_INTERNAL_OWNER, EnvBundle
 
 # The shell wrappers, as one canonical source. `mien shell-init` prints this so a
 # user can wire it up with `eval "$(mien shell-init)"` — no repo checkout needed,
@@ -57,42 +57,36 @@ def render_shell_init(shell: str) -> str:
     return header + _SHELL_WRAPPERS
 
 
-# What `BUILTIN_VARS` says instead of a service name for mien's own bookkeeping
-# variables. Named rather than spelled out at each use because the collision
-# message keys off it: for a real service it can suggest `--service <owner>`, and
-# for these two there is no such command to suggest.
-MIEN_INTERNAL_OWNER = "mien itself"
+# Re-exported from `mien.env`, which sets these variables and must name their
+# owner the same way — see the note there. Kept importable from here because the
+# collision message keys off it: for a real service it can suggest
+# `--service <owner>`, and for these two there is no such command to suggest.
 
-# Every environment variable a built-in service puts in the environment, and the
-# service that owns it. A map rather than a bare list because two readers need
-# the owner: the collision check that refuses a `custom` variable named after a
-# built-in has to say which service it would fight (`mien.config`), and nothing
-# else in the file can tell you that `GIT_SSH_COMMAND` is github's.
-BUILTIN_VARS: dict[str, str] = {
-    "MIEN_PROFILE": MIEN_INTERNAL_OWNER,
-    "MIEN_EPHEMERAL_DIR": MIEN_INTERNAL_OWNER,
-    "CLOUDSDK_ACTIVE_CONFIG_NAME": "google",
-    "CLOUDSDK_CORE_PROJECT": "google",
-    "GOOGLE_APPLICATION_CREDENTIALS": "google",
-    "GH_TOKEN": "github",
-    "MIEN_SLACK_TOKENS": "slack",
-    "MIEN_SLACK_DEFAULT_TOKEN": "slack",
-    "AWS_PROFILE": "aws",
-    "AWS_DEFAULT_REGION": "aws",
-    "AWS_ACCESS_KEY_ID": "aws",
-    "AWS_SECRET_ACCESS_KEY": "aws",
-    "OCI_CLI_PROFILE": "oci",
-    "OCI_CLI_CONFIG_FILE": "oci",
-    "ATLASSIAN_EMAIL": "atlassian",
-    "ATLASSIAN_API_TOKEN": "atlassian",
-    "ATLASSIAN_BASE_URL": "atlassian",
-    "NOTION_TOKEN": "notion",
-    "GIT_SSH_COMMAND": "github",
-}
+# `BUILTIN_VARS` is re-exported from `mien.env` too: `plan_env` needs the same
+# map to name the variables of a service this profile does not configure, and
+# one hand-maintained list is the only way the scrub and the card cannot drift.
 
 # Derived, never hand-listed: a variable added to `BUILTIN_VARS` is scrubbed from
 # the moment it exists, and the two cannot drift.
 KNOWN_VARS = list(BUILTIN_VARS)
+
+# The built-ins whose value is a selector, a path or an address rather than a
+# credential, so `mien status` may print it. An allowlist rather than a denylist
+# of secrets on purpose: a variable added to `BUILTIN_VARS` later is masked until
+# someone decides it is safe, which is the direction that fails closed.
+NON_SECRET_VARS: frozenset[str] = frozenset({
+    "CLOUDSDK_ACTIVE_CONFIG_NAME",
+    "CLOUDSDK_CORE_PROJECT",
+    "GOOGLE_APPLICATION_CREDENTIALS",   # a path to a 0600 file, not the token
+    "GIT_SSH_COMMAND",                  # `ssh -i <path>`
+    "MIEN_SLACK_TOKENS",                # a path to the 0600 workspace map
+    "AWS_PROFILE",
+    "AWS_DEFAULT_REGION",
+    "OCI_CLI_PROFILE",
+    "OCI_CLI_CONFIG_FILE",
+    "ATLASSIAN_EMAIL",
+    "ATLASSIAN_BASE_URL",
+})
 
 # Variables a `custom` credential may not be named after, each mapped to what it
 # is — the message quotes the phrase, so a name cannot be listed here without
