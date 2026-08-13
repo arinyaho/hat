@@ -16,8 +16,12 @@ def _no_capture_context(monkeypatch):
     `MIEN_TOKEN` is cleared for the mirror-image reason: it *disarms* the
     refusal, so an ambient `MIEN_TOKEN=capture-ok` would silently turn the
     refusal tests green-by-default.
+    `MIEN_PROFILE` goes for a third reason: `CliRunner(env=…)` overlays
+    `os.environ` rather than replacing it, so a developer with a profile
+    exported in their shell would silently satisfy any test that means to
+    exercise the no-profile path. Tests that need one set it explicitly.
     """
-    for marker in (*CAPTURE_MARKER_VARS, "MIEN_TOKEN"):
+    for marker in (*CAPTURE_MARKER_VARS, "MIEN_TOKEN", "MIEN_PROFILE"):
         monkeypatch.delenv(marker, raising=False)
 
 
