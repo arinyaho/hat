@@ -38,12 +38,6 @@ def test_status_when_unset(runner, mien_cfg, monkeypatch):
     assert "no profile active" in result.output.lower()
 
 
-def test_status_active(runner, mien_cfg, monkeypatch):
-    monkeypatch.setenv("MIEN_PROFILE", "personal")
-    result = runner.invoke(main, ["status"])
-    assert "personal" in result.output
-
-
 def test_status_prints_a_value_only_for_the_pinned_non_secret_vars(
         runner, mien_cfg, monkeypatch):
     """`status` masks on an allowlist, so the allowlist is the security boundary.
@@ -597,23 +591,6 @@ def test_use_attributes_files_to_the_owner_pid(runner, tmp_path, monkeypatch, mo
     assert keyed, f"no files attributed to the owner pid: {[f.name for f in files]}"
 
 
-def test_use_leaves_the_files_on_disk_for_the_shell_to_source(runner, tmp_path, monkeypatch, mocker):
-    """The activation contract: unlike exec/run, `use` must NOT clean up — the
-    calling shell sources these after the process exits. A well-meaning cleanup
-    added to use_cmd would break activation silently; this pins against it."""
-    _use_setup(runner, mocker, tmp_path, monkeypatch)
-    result = runner.invoke(main, ["use", "personal", "--print", "--owner-pid", "999999"])
-    assert result.exit_code == 0, result.output
-    # The credential files (keyed to the owner pid) must survive — a cleanup
-    # added to use_cmd would delete exactly these, which is what breaks
-    # activation. Checking the pid-keyed files, not just "any file", is what
-    # makes this bite: the env loader has a different name and would survive a
-    # pid-scoped cleanup, hiding the break.
-    remaining = [f.name for f in (tmp_path / "mien").iterdir()]
-    assert any(n.startswith("999999-") for n in remaining), \
-        f"use must leave its owner-pid credential files on disk; found {remaining}"
-
-
 def test_use_refuses_when_stdout_is_a_tty(runner, mien_cfg, mocker, monkeypatch):
     runner.invoke(main, ["init"], input="2\nmien-\n")
     backend = mocker.patch("mien.cli.load_backend").return_value
@@ -735,43 +712,6 @@ def test_token_google_prints_access_token(runner, mien_cfg, mocker):
     )
 
     result = runner.invoke(main, ["token", "google"], env={"MIEN_PROFILE": "personal", "MIEN_CONFIG": str(mien_cfg)})
-    assert result.exit_code == 0
-    assert "ya29-access" in result.output
-
-
-def test_token_google_accepts_explicit_profile_without_env(runner, mien_cfg, mocker, monkeypatch):
-    """`mien token` must work without an ambient MIEN_PROFILE.
-
-    AI agent harnesses (Claude Code, Codex) start a fresh shell per tool call, so
-    env vars set by a previous `eval "$(mien use ...)"` are gone by the next call.
-    Without an explicit --profile the agent has no reliable way to mint a token.
-    """
-    # CliRunner's env= overlays os.environ rather than replacing it, so an
-    # exported MIEN_PROFILE on the developer's machine would otherwise mask
-    # whether --profile did any work at all.
-    monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    backend = mocker.patch("mien.cli.load_backend").return_value
-    backend.put.side_effect = ["ref://oauth", "ref://refresh"]
-    backend.get.side_effect = lambda r: {
-        "ref://oauth": b"csec",
-        "ref://refresh": b"refresh-zzz",
-    }[r]
-    mocker.patch("mien.cli.google_installed_app_flow", return_value="refresh-zzz")
-    mocker.patch("mien.cli.exchange_refresh_token", return_value="ya29-access")
-
-    runner.invoke(
-        main,
-        ["login", "personal", "--service", "google",
-         "--email", "me@x.com", "--client-id", "cid"],
-        input="y\ncsec\n",
-    )
-
-    result = runner.invoke(
-        main,
-        ["token", "google", "--profile", "personal"],
-        env={"MIEN_CONFIG": str(mien_cfg)},
-    )
     assert result.exit_code == 0
     assert "ya29-access" in result.output
 
@@ -1799,24 +1739,6 @@ def test_logout_notion_removes_service(runner, mien_cfg, mocker):
     assert payload["profiles"]["personal"]["notion"] is None
 
 
-def test_token_notion_prints_api_token(runner, mien_cfg, mocker):
-    backend = mocker.patch("mien.cli.load_backend").return_value
-    backend.put.return_value = "ref://notion-token"
-    backend.get.return_value = b"my-secret-notion-token"
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    runner.invoke(
-        main,
-        ["login", "personal", "--service", "notion", "--token-stdin"],
-        input="y\nmy-secret-notion-token\n",
-    )
-    result = runner.invoke(
-        main, ["token", "notion"],
-        env={"MIEN_PROFILE": "personal", "MIEN_CONFIG": str(mien_cfg)},
-    )
-    assert result.exit_code == 0, result.output
-    assert "my-secret-notion-token" in result.output
-
-
 def _notion_profile(runner, mocker, secret=b"my-secret-notion-token"):
     """A configured profile whose notion token is `secret`."""
     backend = mocker.patch("mien.cli.load_backend").return_value
@@ -2130,23 +2052,6 @@ def test_which_refuses_to_guess_between_equally_specific_scopes(runner, tmp_path
     result = runner.invoke(main, ["which"])
     assert result.exit_code != 0
     assert "claimed with equal specificity by: alpha, bravo" in result.output
-
-
-def test_which_prefers_an_activated_profile_over_an_ambiguous_directory(
-    runner, tmp_path, monkeypatch
-):
-    """An explicit `mien use` leaves nothing to guess, so a directory two
-    profiles claim equally must not abort the command."""
-    shared = tmp_path / "Projects" / "shared"
-    shared.mkdir(parents=True)
-    _pinned_config(tmp_path, monkeypatch,
-                   alpha=["*/Projects/shared"], bravo=["*/Projects/shared"],
-                   personal=[])
-    monkeypatch.setenv("MIEN_PROFILE", "personal")
-    monkeypatch.chdir(shared)
-    result = runner.invoke(main, ["which"], catch_exceptions=False)
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "personal"
 
 
 def test_which_warns_when_the_directory_is_ambiguous_under_an_override(

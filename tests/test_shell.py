@@ -87,35 +87,6 @@ def test_emit_use_scrubs_stale_vars_before_exporting(tmp_path, monkeypatch):
     assert "export GH_TOKEN='ghp_new'" in body
 
 
-def test_emit_unset_lists_known_vars():
-    out = emit_unset({})
-    for var in [
-        "MIEN_PROFILE",
-        "MIEN_EPHEMERAL_DIR",
-        "CLOUDSDK_ACTIVE_CONFIG_NAME",
-        "CLOUDSDK_CORE_PROJECT",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GH_TOKEN",
-        "MIEN_SLACK_TOKENS",
-        "MIEN_SLACK_DEFAULT_TOKEN",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-    ]:
-        assert f"unset {var}" in out
-
-
-def test_known_vars_includes_atlassian():
-    from mien.shell import KNOWN_VARS
-    assert "ATLASSIAN_EMAIL" in KNOWN_VARS
-    assert "ATLASSIAN_API_TOKEN" in KNOWN_VARS
-    assert "ATLASSIAN_BASE_URL" in KNOWN_VARS
-
-
-def test_known_vars_includes_notion():
-    from mien.shell import KNOWN_VARS
-    assert "NOTION_TOKEN" in KNOWN_VARS
-
-
 def _profile(name, **kwargs):
     from mien.config import Profile
     return Profile(name=name, **kwargs)

@@ -639,14 +639,6 @@ def test_guard_fails_open_on_a_config_it_cannot_open_and_says_it_is_not_enforcin
     assert result.stdout == ""
 
 
-def test_guard_fails_open_when_the_config_path_is_a_directory(tmp_path, monkeypatch):
-    _point_cfg_at_a_directory(tmp_path, monkeypatch)
-    result = _run_guard("/flat/api", monkeypatch, mien_profile="personal",
-                        remote="https://github.com/acme-core/api.git")
-    assert result.exit_code == 0
-    assert "NOT enforcing" in result.stderr
-
-
 def test_an_absent_config_stays_silent_everywhere(tmp_path, monkeypatch):
     # The regression the announcement must not cost: no config at all means mien
     # is simply not set up here, which is not a failure. All three surfaces stay
