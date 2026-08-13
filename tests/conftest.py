@@ -19,3 +19,20 @@ def _no_capture_context(monkeypatch):
     """
     for marker in (*CAPTURE_MARKER_VARS, "MIEN_TOKEN"):
         monkeypatch.delenv(marker, raising=False)
+
+
+def make_config(*, profiles):
+    """A Config with the boilerplate every test repeats verbatim.
+
+    Twenty-two call sites built this literal inline, identical but for
+    `profiles`, so adding a field to Config meant editing all of them.
+    """
+    from mien.config import BackendConfig, Config, SecretNaming
+    from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN
+    return Config(
+        schema_version=1,
+        secrets_backend=BackendConfig(type="macos_keychain", options={}),
+        bootstrap={},
+        secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+        profiles=profiles,
+    )

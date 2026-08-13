@@ -2,6 +2,8 @@ import json
 import os
 import re
 
+from conftest import make_config
+
 import pytest
 from click.testing import CliRunner
 
@@ -108,10 +110,7 @@ class TestRenderSegment:
 
 def _write_cfg(tmp_path, monkeypatch, **profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={name: Profile(name=name, default_for=scopes)
                   for name, scopes in profiles.items()},
     ))
@@ -119,10 +118,7 @@ def _write_cfg(tmp_path, monkeypatch, **profiles):
 
 def _write_cfg_remotes(tmp_path, monkeypatch, **owns):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={name: Profile(name=name, owns_remotes=pats)
                   for name, pats in owns.items()},
     ))
@@ -249,10 +245,7 @@ def test_statusline_flags_wrong_identity_by_remote(tmp_path, monkeypatch):
 
 def _write_cfg_full(tmp_path, monkeypatch, profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles=profiles,
     ))
 
@@ -680,10 +673,7 @@ def test_an_absent_config_stays_silent_everywhere(tmp_path, monkeypatch):
 def test_statusline_remote_owner_beats_a_directory_scope(tmp_path, monkeypatch):
     """When both signals resolve and disagree, the repo's remote wins."""
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={
             "work": Profile(name="work", owns_remotes=["github.com/acme-*/*"]),
             "personal": Profile(name="personal", default_for=["*/flat/*"]),

@@ -19,6 +19,8 @@ from mien.handover import refusal_reason
 from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN
 from mien.project import record_allow, write_declaration
 
+from conftest import make_config
+
 ACME_REMOTE = "https://github.com/acme-core/api.git"
 
 
@@ -29,10 +31,7 @@ def runner():
 
 def _write_config(tmp_path, monkeypatch, profiles: dict[str, Profile]) -> None:
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles=profiles,
     ))
 

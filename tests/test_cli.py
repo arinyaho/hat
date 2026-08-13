@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from conftest import make_config
+
 import pytest
 from click.testing import CliRunner
 
@@ -99,10 +101,7 @@ def _rich_profile_cfg(tmp_path, monkeypatch):
                              GitHubService, GoogleService, NotionService, Profile,
                              SecretNaming, SlackWorkspace, save_config)
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"work": Profile(
             name="work",
             google=GoogleService(email="me@acme.example", oauth_client_id="c",
@@ -138,10 +137,7 @@ def test_whoami_card_omits_absent_providers(runner, tmp_path, monkeypatch):
     from mien.config import (BackendConfig, Config, GitHubService, Profile,
                              SecretNaming, save_config)
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"solo": Profile(
             name="solo",
             github=GitHubService(username="octocat", host="github.com", token_ref="r"))},
@@ -202,10 +198,7 @@ def _project_env(tmp_path, monkeypatch, *profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={p: Profile(name=p) for p in profiles},
     ))
     ws = tmp_path / "ws"
@@ -348,10 +341,7 @@ def test_whoami_live_cleans_ephemeral_credential_files(runner, tmp_path, monkeyp
     from mien.verify import ProbeResult, Status
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -376,10 +366,7 @@ def test_whoami_live_names_google_when_it_cannot_be_probed(runner, mien_cfg, moc
     from mien.config import (BackendConfig, Config, Profile, SecretNaming,
                              GoogleService, GitHubService, save_config)
     from mien.verify import ProbeResult, Status
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -454,10 +441,7 @@ def test_whoami_live_names_unchecked_services(runner, mien_cfg, mocker):
     from mien.config import (BackendConfig, Config, Profile, SecretNaming,
                              SlackWorkspace, GitHubService, NotionService, save_config)
     from mien.verify import ProbeResult, Status
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -589,10 +573,7 @@ def _use_setup(runner, mocker, tmp_path, monkeypatch, *, slack=True):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     ws = [SlackWorkspace(workspace="team-a", user_token_ref="ref://s")] if slack else []
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="me", host="github.com", token_ref="ref://gh"),
@@ -2018,10 +1999,7 @@ def _pinned_config(tmp_path, monkeypatch, **scopes):
     """Write a config whose profiles claim directories via default_for."""
     from mien.config import BackendConfig, Config, Profile, SecretNaming, save_config
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={n: Profile(name=n, default_for=list(g)) for n, g in scopes.items()},
     ))
 
@@ -2323,10 +2301,7 @@ def test_run_removes_ephemeral_files_after_child_exits(runner, tmp_path, monkeyp
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"work": Profile(
             name="work",
             default_for=["*/Projects/acme"],
