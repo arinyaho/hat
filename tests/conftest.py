@@ -16,6 +16,27 @@ def _no_capture_context(monkeypatch):
     `MIEN_TOKEN` is cleared for the mirror-image reason: it *disarms* the
     refusal, so an ambient `MIEN_TOKEN=capture-ok` would silently turn the
     refusal tests green-by-default.
+    `MIEN_PROFILE` goes for a third reason: `CliRunner(env=…)` overlays
+    `os.environ` rather than replacing it, so a developer with a profile
+    exported in their shell would silently satisfy any test that means to
+    exercise the no-profile path. Tests that need one set it explicitly.
     """
-    for marker in (*CAPTURE_MARKER_VARS, "MIEN_TOKEN"):
+    for marker in (*CAPTURE_MARKER_VARS, "MIEN_TOKEN", "MIEN_PROFILE"):
         monkeypatch.delenv(marker, raising=False)
+
+
+def make_config(*, profiles):
+    """A Config with the boilerplate every test repeats verbatim.
+
+    Twenty-two call sites built this literal inline, identical but for
+    `profiles`, so adding a field to Config meant editing all of them.
+    """
+    from mien.config import BackendConfig, Config, SecretNaming
+    from mien.secret_naming import BUILTIN_DEFAULT, BUILTIN_SLACK_TOKEN
+    return Config(
+        schema_version=1,
+        secrets_backend=BackendConfig(type="macos_keychain", options={}),
+        bootstrap={},
+        secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+        profiles=profiles,
+    )

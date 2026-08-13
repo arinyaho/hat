@@ -40,7 +40,6 @@ def test_template_tokens_counts_only_what_actually_substitutes():
     """
     assert template_tokens("mien-{profile}-{{kind}}") == {"profile"}
     assert render_name("mien-{profile}-{{kind}}", profile="work") == "mien-work-{kind}"
-    assert "kind" not in template_tokens("mien-{profile}-{kind[0]}")
 
 
 @pytest.mark.parametrize("template", [

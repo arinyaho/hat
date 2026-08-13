@@ -10,29 +10,32 @@ from mien.verify import (
 )
 
 
+def _fake_run(mocker, *, stdout=b"", returncode=0, stderr=b"", raises=None):
+    """Stub the one subprocess both probes shell out through."""
+    run = mocker.patch("mien.verify.subprocess.run")
+    if raises is not None:
+        run.side_effect = raises
+    else:
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+    return run
+
+
 class TestGithub:
     """`gh api user -q .login` reports who the token actually authenticates as,
     which is compared to the profile's configured username."""
 
-    def _gh(self, mocker, *, stdout=b"", returncode=0, stderr=b"", raises=None):
-        run = mocker.patch("mien.verify.subprocess.run")
-        if raises is not None:
-            run.side_effect = raises
-        else:
-            run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=returncode, stdout=stdout, stderr=stderr
-            )
-        return run
 
     def test_match(self, mocker):
-        self._gh(mocker, stdout=b"octocat\n")
+        _fake_run(mocker, stdout=b"octocat\n")
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status is Status.MATCH
         assert r.live == "octocat"
         assert r.configured == "octocat"
 
     def test_mismatch_is_flagged(self, mocker):
-        self._gh(mocker, stdout=b"someone-else\n")
+        _fake_run(mocker, stdout=b"someone-else\n")
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status is Status.MISMATCH
         assert r.live == "someone-else"
@@ -40,7 +43,7 @@ class TestGithub:
 
     def test_revoked_token_is_unauthorized_not_mismatch(self, mocker):
         # gh exits non-zero and says so on stderr when the token is bad.
-        self._gh(mocker, returncode=1,
+        _fake_run(mocker, returncode=1,
                  stderr=b"HTTP 401: Bad credentials (https://api.github.com/user)")
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status is Status.UNAUTHORIZED
@@ -50,27 +53,27 @@ class TestGithub:
         # gh also exits non-zero when it cannot reach the network. That is a
         # could-not-check, NOT a dead credential — misreporting it as
         # UNAUTHORIZED would fail the gate offline and name the wrong remedy.
-        self._gh(mocker, returncode=1,
+        _fake_run(mocker, returncode=1,
                  stderr=b"error connecting to api.github.com: no such host")
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status is Status.UNREACHABLE
         assert r.live is None
 
     def test_gh_not_installed_is_unavailable(self, mocker):
-        self._gh(mocker, raises=FileNotFoundError())
+        _fake_run(mocker, raises=FileNotFoundError())
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status is Status.UNAVAILABLE
 
     def test_non_executable_gh_does_not_crash(self, mocker):
         # A present-but-non-executable gh raises PermissionError (an OSError).
         # The probe must not crash — one broken tool must not hide the others.
-        self._gh(mocker, raises=PermissionError(13, "Permission denied"))
+        _fake_run(mocker, raises=PermissionError(13, "Permission denied"))
         r = probe_github("octocat", {"GH_TOKEN": "x"})
         assert r.status in (Status.UNAVAILABLE, Status.UNREACHABLE)
         assert r.live is None
 
     def test_probe_runs_under_the_supplied_env(self, mocker):
-        run = self._gh(mocker, stdout=b"octocat\n")
+        run = _fake_run(mocker, stdout=b"octocat\n")
         probe_github("octocat", {"GH_TOKEN": "profile-token"})
         assert run.call_args.kwargs["env"]["GH_TOKEN"] == "profile-token"
 
@@ -80,37 +83,28 @@ class TestAws:
     an ARN — so a successful probe reports the live caller as UNCOMPARABLE, not
     MATCH, while auth and reachability failures are still distinguished."""
 
-    def _aws(self, mocker, *, stdout=b"", returncode=0, stderr=b"", raises=None):
-        run = mocker.patch("mien.verify.subprocess.run")
-        if raises is not None:
-            run.side_effect = raises
-        else:
-            run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=returncode, stdout=stdout, stderr=stderr
-            )
-        return run
 
     def test_success_is_uncomparable_with_the_live_arn(self, mocker):
-        self._aws(mocker, stdout=b"arn:aws:iam::123456789012:user/dev\n")
+        _fake_run(mocker, stdout=b"arn:aws:iam::123456789012:user/dev\n")
         r = probe_aws("work", {"AWS_PROFILE": "work"})
         assert r.status is Status.UNCOMPARABLE
         assert r.live == "arn:aws:iam::123456789012:user/dev"
         assert r.configured == "work"
 
     def test_expired_credentials_are_unauthorized(self, mocker):
-        self._aws(mocker, returncode=254,
+        _fake_run(mocker, returncode=254,
                   stderr=b"An error occurred (ExpiredToken) when calling ...")
         r = probe_aws("work", {"AWS_PROFILE": "work"})
         assert r.status is Status.UNAUTHORIZED
 
     def test_network_failure_is_unreachable(self, mocker):
-        self._aws(mocker, returncode=255,
+        _fake_run(mocker, returncode=255,
                   stderr=b"Could not connect to the endpoint URL: ...")
         r = probe_aws("work", {"AWS_PROFILE": "work"})
         assert r.status is Status.UNREACHABLE
 
     def test_aws_not_installed_is_unavailable(self, mocker):
-        self._aws(mocker, raises=FileNotFoundError())
+        _fake_run(mocker, raises=FileNotFoundError())
         r = probe_aws("work", {})
         assert r.status is Status.UNAVAILABLE
 

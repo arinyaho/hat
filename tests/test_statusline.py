@@ -2,6 +2,8 @@ import json
 import os
 import re
 
+from conftest import make_config
+
 import pytest
 from click.testing import CliRunner
 
@@ -108,10 +110,7 @@ class TestRenderSegment:
 
 def _write_cfg(tmp_path, monkeypatch, **profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={name: Profile(name=name, default_for=scopes)
                   for name, scopes in profiles.items()},
     ))
@@ -119,10 +118,7 @@ def _write_cfg(tmp_path, monkeypatch, **profiles):
 
 def _write_cfg_remotes(tmp_path, monkeypatch, **owns):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={name: Profile(name=name, owns_remotes=pats)
                   for name, pats in owns.items()},
     ))
@@ -249,10 +245,7 @@ def test_statusline_flags_wrong_identity_by_remote(tmp_path, monkeypatch):
 
 def _write_cfg_full(tmp_path, monkeypatch, profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles=profiles,
     ))
 
@@ -404,35 +397,19 @@ def test_prompt_is_silent_without_a_config(tmp_path, monkeypatch):
     assert result.exit_code == 0 and result.output == ""
 
 
-def test_prompt_says_so_on_an_unreadable_config(tmp_path, monkeypatch):
-    # A blank prompt segment reads as "nothing to report", when in fact mien can
-    # no longer tell who you are here — so it shows a marker instead of nothing.
+def test_prompt_reports_an_unreadable_config_inside_the_prompt_line(tmp_path, monkeypatch):
+    # A blank segment reads as "nothing to report" when in fact mien can no
+    # longer tell who you are here, so it shows a marker instead of nothing —
+    # on stdout, because a prompt redraws constantly and stderr would spam the
+    # terminal every redraw, and short enough to sit in a prompt line.
     _write_broken_cfg(tmp_path, monkeypatch)
     result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
                          remote="https://github.com/acme-core/api.git")
     assert result.exit_code == 0  # a prompt command must never fail the shell
     assert "mien:config" in result.stdout
-
-
-def test_prompt_puts_the_config_marker_on_stdout_not_stderr(tmp_path, monkeypatch):
-    # Deliberate, and easy for a later refactor to flip: a prompt redraws
-    # constantly and its stderr goes straight to the terminal, so a message
-    # there would spam every redraw. The marker rides in the segment instead.
-    _write_broken_cfg(tmp_path, monkeypatch)
-    result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
-                         remote="https://github.com/acme-core/api.git")
-    assert "mien:config" in result.stdout
     assert result.stderr == ""
-
-
-def test_prompt_config_marker_stays_compact(tmp_path, monkeypatch):
-    # It has to sit inside a prompt line: no newline (same as a healthy
-    # segment), and no parse detail — `mien doctor` is where that belongs.
-    _write_broken_cfg(tmp_path, monkeypatch)
-    result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
-                         remote="https://github.com/acme-core/api.git")
     assert "\n" not in result.stdout
-    assert "invalid config JSON" not in result.stdout
+    assert "invalid config JSON" not in result.stdout   # detail belongs in `mien doctor`
     assert str(tmp_path) not in result.stdout
     assert len(_ANSI.sub("", result.stdout)) <= 32
 
@@ -646,14 +623,6 @@ def test_guard_fails_open_on_a_config_it_cannot_open_and_says_it_is_not_enforcin
     assert result.stdout == ""
 
 
-def test_guard_fails_open_when_the_config_path_is_a_directory(tmp_path, monkeypatch):
-    _point_cfg_at_a_directory(tmp_path, monkeypatch)
-    result = _run_guard("/flat/api", monkeypatch, mien_profile="personal",
-                        remote="https://github.com/acme-core/api.git")
-    assert result.exit_code == 0
-    assert "NOT enforcing" in result.stderr
-
-
 def test_an_absent_config_stays_silent_everywhere(tmp_path, monkeypatch):
     # The regression the announcement must not cost: no config at all means mien
     # is simply not set up here, which is not a failure. All three surfaces stay
@@ -680,10 +649,7 @@ def test_an_absent_config_stays_silent_everywhere(tmp_path, monkeypatch):
 def test_statusline_remote_owner_beats_a_directory_scope(tmp_path, monkeypatch):
     """When both signals resolve and disagree, the repo's remote wins."""
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={
             "work": Profile(name="work", owns_remotes=["github.com/acme-*/*"]),
             "personal": Profile(name="personal", default_for=["*/flat/*"]),

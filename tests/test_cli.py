@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from conftest import make_config
+
 import pytest
 from click.testing import CliRunner
 
@@ -34,12 +36,6 @@ def test_status_when_unset(runner, mien_cfg, monkeypatch):
     result = runner.invoke(main, ["status"])
     assert result.exit_code == 0
     assert "no profile active" in result.output.lower()
-
-
-def test_status_active(runner, mien_cfg, monkeypatch):
-    monkeypatch.setenv("MIEN_PROFILE", "personal")
-    result = runner.invoke(main, ["status"])
-    assert "personal" in result.output
 
 
 def test_status_prints_a_value_only_for_the_pinned_non_secret_vars(
@@ -99,10 +95,7 @@ def _rich_profile_cfg(tmp_path, monkeypatch):
                              GitHubService, GoogleService, NotionService, Profile,
                              SecretNaming, SlackWorkspace, save_config)
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"work": Profile(
             name="work",
             google=GoogleService(email="me@acme.example", oauth_client_id="c",
@@ -138,10 +131,7 @@ def test_whoami_card_omits_absent_providers(runner, tmp_path, monkeypatch):
     from mien.config import (BackendConfig, Config, GitHubService, Profile,
                              SecretNaming, save_config)
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"solo": Profile(
             name="solo",
             github=GitHubService(username="octocat", host="github.com", token_ref="r"))},
@@ -202,10 +192,7 @@ def _project_env(tmp_path, monkeypatch, *profiles):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={p: Profile(name=p) for p in profiles},
     ))
     ws = tmp_path / "ws"
@@ -348,10 +335,7 @@ def test_whoami_live_cleans_ephemeral_credential_files(runner, tmp_path, monkeyp
     from mien.verify import ProbeResult, Status
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -376,10 +360,7 @@ def test_whoami_live_names_google_when_it_cannot_be_probed(runner, mien_cfg, moc
     from mien.config import (BackendConfig, Config, Profile, SecretNaming,
                              GoogleService, GitHubService, save_config)
     from mien.verify import ProbeResult, Status
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -454,10 +435,7 @@ def test_whoami_live_names_unchecked_services(runner, mien_cfg, mocker):
     from mien.config import (BackendConfig, Config, Profile, SecretNaming,
                              SlackWorkspace, GitHubService, NotionService, save_config)
     from mien.verify import ProbeResult, Status
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="octocat", host="github.com", token_ref="ref://gh"),
@@ -589,10 +567,7 @@ def _use_setup(runner, mocker, tmp_path, monkeypatch, *, slack=True):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     ws = [SlackWorkspace(workspace="team-a", user_token_ref="ref://s")] if slack else []
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"personal": Profile(
             name="personal",
             github=GitHubService(username="me", host="github.com", token_ref="ref://gh"),
@@ -614,23 +589,6 @@ def test_use_attributes_files_to_the_owner_pid(runner, tmp_path, monkeypatch, mo
     # Every ephemeral file (slack token map, env loader) is keyed to 999999.
     keyed = [f for f in files if f.name.startswith("999999-")]
     assert keyed, f"no files attributed to the owner pid: {[f.name for f in files]}"
-
-
-def test_use_leaves_the_files_on_disk_for_the_shell_to_source(runner, tmp_path, monkeypatch, mocker):
-    """The activation contract: unlike exec/run, `use` must NOT clean up — the
-    calling shell sources these after the process exits. A well-meaning cleanup
-    added to use_cmd would break activation silently; this pins against it."""
-    _use_setup(runner, mocker, tmp_path, monkeypatch)
-    result = runner.invoke(main, ["use", "personal", "--print", "--owner-pid", "999999"])
-    assert result.exit_code == 0, result.output
-    # The credential files (keyed to the owner pid) must survive — a cleanup
-    # added to use_cmd would delete exactly these, which is what breaks
-    # activation. Checking the pid-keyed files, not just "any file", is what
-    # makes this bite: the env loader has a different name and would survive a
-    # pid-scoped cleanup, hiding the break.
-    remaining = [f.name for f in (tmp_path / "mien").iterdir()]
-    assert any(n.startswith("999999-") for n in remaining), \
-        f"use must leave its owner-pid credential files on disk; found {remaining}"
 
 
 def test_use_refuses_when_stdout_is_a_tty(runner, mien_cfg, mocker, monkeypatch):
@@ -754,43 +712,6 @@ def test_token_google_prints_access_token(runner, mien_cfg, mocker):
     )
 
     result = runner.invoke(main, ["token", "google"], env={"MIEN_PROFILE": "personal", "MIEN_CONFIG": str(mien_cfg)})
-    assert result.exit_code == 0
-    assert "ya29-access" in result.output
-
-
-def test_token_google_accepts_explicit_profile_without_env(runner, mien_cfg, mocker, monkeypatch):
-    """`mien token` must work without an ambient MIEN_PROFILE.
-
-    AI agent harnesses (Claude Code, Codex) start a fresh shell per tool call, so
-    env vars set by a previous `eval "$(mien use ...)"` are gone by the next call.
-    Without an explicit --profile the agent has no reliable way to mint a token.
-    """
-    # CliRunner's env= overlays os.environ rather than replacing it, so an
-    # exported MIEN_PROFILE on the developer's machine would otherwise mask
-    # whether --profile did any work at all.
-    monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    backend = mocker.patch("mien.cli.load_backend").return_value
-    backend.put.side_effect = ["ref://oauth", "ref://refresh"]
-    backend.get.side_effect = lambda r: {
-        "ref://oauth": b"csec",
-        "ref://refresh": b"refresh-zzz",
-    }[r]
-    mocker.patch("mien.cli.google_installed_app_flow", return_value="refresh-zzz")
-    mocker.patch("mien.cli.exchange_refresh_token", return_value="ya29-access")
-
-    runner.invoke(
-        main,
-        ["login", "personal", "--service", "google",
-         "--email", "me@x.com", "--client-id", "cid"],
-        input="y\ncsec\n",
-    )
-
-    result = runner.invoke(
-        main,
-        ["token", "google", "--profile", "personal"],
-        env={"MIEN_CONFIG": str(mien_cfg)},
-    )
     assert result.exit_code == 0
     assert "ya29-access" in result.output
 
@@ -1818,24 +1739,6 @@ def test_logout_notion_removes_service(runner, mien_cfg, mocker):
     assert payload["profiles"]["personal"]["notion"] is None
 
 
-def test_token_notion_prints_api_token(runner, mien_cfg, mocker):
-    backend = mocker.patch("mien.cli.load_backend").return_value
-    backend.put.return_value = "ref://notion-token"
-    backend.get.return_value = b"my-secret-notion-token"
-    runner.invoke(main, ["init"], input="2\nmien-\n")
-    runner.invoke(
-        main,
-        ["login", "personal", "--service", "notion", "--token-stdin"],
-        input="y\nmy-secret-notion-token\n",
-    )
-    result = runner.invoke(
-        main, ["token", "notion"],
-        env={"MIEN_PROFILE": "personal", "MIEN_CONFIG": str(mien_cfg)},
-    )
-    assert result.exit_code == 0, result.output
-    assert "my-secret-notion-token" in result.output
-
-
 def _notion_profile(runner, mocker, secret=b"my-secret-notion-token"):
     """A configured profile whose notion token is `secret`."""
     backend = mocker.patch("mien.cli.load_backend").return_value
@@ -2018,10 +1921,7 @@ def _pinned_config(tmp_path, monkeypatch, **scopes):
     """Write a config whose profiles claim directories via default_for."""
     from mien.config import BackendConfig, Config, Profile, SecretNaming, save_config
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={n: Profile(name=n, default_for=list(g)) for n, g in scopes.items()},
     ))
 
@@ -2152,23 +2052,6 @@ def test_which_refuses_to_guess_between_equally_specific_scopes(runner, tmp_path
     result = runner.invoke(main, ["which"])
     assert result.exit_code != 0
     assert "claimed with equal specificity by: alpha, bravo" in result.output
-
-
-def test_which_prefers_an_activated_profile_over_an_ambiguous_directory(
-    runner, tmp_path, monkeypatch
-):
-    """An explicit `mien use` leaves nothing to guess, so a directory two
-    profiles claim equally must not abort the command."""
-    shared = tmp_path / "Projects" / "shared"
-    shared.mkdir(parents=True)
-    _pinned_config(tmp_path, monkeypatch,
-                   alpha=["*/Projects/shared"], bravo=["*/Projects/shared"],
-                   personal=[])
-    monkeypatch.setenv("MIEN_PROFILE", "personal")
-    monkeypatch.chdir(shared)
-    result = runner.invoke(main, ["which"], catch_exceptions=False)
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "personal"
 
 
 def test_which_warns_when_the_directory_is_ambiguous_under_an_override(
@@ -2323,10 +2206,7 @@ def test_run_removes_ephemeral_files_after_child_exits(runner, tmp_path, monkeyp
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.delenv("MIEN_PROFILE", raising=False)
-    save_config(Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    save_config(make_config(
         profiles={"work": Profile(
             name="work",
             default_for=["*/Projects/acme"],

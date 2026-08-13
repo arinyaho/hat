@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from conftest import make_config
+
 import pytest
 
 from mien.config import (
@@ -71,10 +73,7 @@ def test_save_then_load_roundtrip(monkeypatch, tmp_path):
 
 def test_owns_remotes_survives_a_roundtrip_and_rejects_a_bare_string(monkeypatch, tmp_path):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    cfg = Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    cfg = make_config(
         profiles={"personal": Profile(
             name="personal",
             owns_remotes=["github.com/me/*", "github.com/me-labs/*"],
@@ -99,10 +98,7 @@ def test_owns_remotes_survives_a_roundtrip_and_rejects_a_bare_string(monkeypatch
 
 def test_git_identity_fields_survive_a_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
-    cfg = Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    cfg = make_config(
         profiles={"work": Profile(name="work", git_email="me@x.example")},
     )
     save_config(cfg)
@@ -1397,10 +1393,7 @@ def test_a_config_with_no_custom_block_loads_unchanged():
 
 
 def test_custom_round_trips_as_names_pointing_at_refs():
-    cfg = Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    cfg = make_config(
         profiles={"work": Profile(name="work", custom={
             "ANTHROPIC_API_KEY": "ref://mien-work-custom-anthropic_api_key",
             "NPM_TOKEN": "ref://mien-work-custom-npm_token",
@@ -1430,10 +1423,7 @@ def test_an_empty_custom_map_is_not_written_at_all():
     below: the key is written then, because the map is the identity). What it buys
     is that the break is confined to those profiles instead of being fleet-wide.
     """
-    cfg = Config(
-        schema_version=1,
-        secrets_backend=BackendConfig(type="macos_keychain", options={}),
-        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT, slack_token=BUILTIN_SLACK_TOKEN),
+    cfg = make_config(
         profiles={
             "plain": Profile(name="plain"),
             "work": Profile(name="work", custom={"NPM_TOKEN": "ref://npm"}),
