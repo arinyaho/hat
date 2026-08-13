@@ -103,7 +103,7 @@ NON_SECRET_VARS: frozenset[str] = frozenset({
 # against fixed off-values, so unset or overwritten both land
 # on "guard on" — the opposite polarity to CAPTURE_MARKER_VARS below, which is
 # read as "is anything set?" and so is refused); XDG_CONFIG_HOME (one
-# non-credential path, the global gitignore `_global_gitignore` writes, and that
+# non-credential path, the global gitignore `ensure_gitignored` writes, and that
 # write already fails soft); LD_PRELOAD/DYLD_* (neither half holds — `unset`
 # does not break the shell, the loader stores no credential, and "mien should
 # not be an injection channel" is a sandbox claim this check cannot back, granting

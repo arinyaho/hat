@@ -39,7 +39,7 @@ ZSHENV_END = "# <<< mien ambient (zshenv) <<<"
 # for real. Set but empty counts as unset, an empty expansion collapsing the
 # scope exactly like a missing parameter.
 #
-# Absent for that reason: TTY (zsh sets it empty whenever stdin is not a
+# Absent, each for its own reason: TTY (zsh sets it empty whenever stdin is not a
 # terminal, which is most shells reading `~/.zshenv`); ZDOTDIR (zsh never sets
 # it, and if the user did, zsh reads `$ZDOTDIR/.zshenv` rather than the
 # `~/.zshenv` `ensure_zshenv_sources` wires up, so this code is not running);

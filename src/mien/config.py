@@ -1081,7 +1081,7 @@ def _config_from_dict(raw: dict) -> Config:
     # waved through the mis-identity commit it exists to block. Checked here
     # against the same annotation as every other leaf, so it cannot drift from
     # `BackendConfig.type: str`. `scalars_only` skips `options`, which is this
-# block's remaining keys rather than a key of its own.
+    # block's remaining keys rather than a key of its own.
     #
     # TYPE only. A string that is not a backend mien has ("keychain", the
     # retired "oci_vault") belongs to `ensure_known_backend`, which carries the
