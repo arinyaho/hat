@@ -91,20 +91,22 @@ NON_SECRET_VARS: frozenset[str] = frozenset({
 # Names a `custom` credential may not take, mapped to what each one is — the
 # refusal quotes the phrase, so a name cannot be listed without saying why
 # (`mien.config.check_custom_var_name`). An entry has to break one of two
-# things: `unset`ting it stops the shell or the loader, or exporting a
-# credential over it puts that credential somewhere nobody asked for. The scrub
-# is the union over every profile, so one such name in one profile strips it in
-# every shell.
+# things: (a) `unset`ting it stops the shell or the loader, or (b) exporting a
+# credential over it puts that credential somewhere nobody asked for.
+# `scrub_vars` is the union over every profile, so one such name in one profile
+# strips it in every shell.
 #
 # Not a POSIX denylist — that would be unmaintainable and would refuse names
-# that are only ever payload. Weighed and left off: PWD/OLDPWD (zsh re-sets on
-# `cd`, and `_trusted_cwd` revalidates with `samefile`); MIEN_GUARD/EXEC/TOKEN
-# (opt-outs matched against fixed off-values, so unset or overwritten both land
+# that are only ever payload. Weighed and left off: PWD/OLDPWD (zsh and bash
+# re-set it on the next `cd`, and `_logical_cwd` revalidates with `samefile` and
+# falls back to `os.getcwd()`); MIEN_GUARD/EXEC/TOKEN (opt-outs matched
+# against fixed off-values, so unset or overwritten both land
 # on "guard on" — the opposite polarity to CAPTURE_MARKER_VARS below, which is
 # read as "is anything set?" and so is refused); XDG_CONFIG_HOME (one
-# non-credential path, and that write already fails soft); LD_PRELOAD/DYLD_*
-# (neither half holds — the loader stores no credential, and "mien should not be
-# an injection channel" is a sandbox claim this check cannot back, granting
+# non-credential path, the global gitignore `_global_gitignore` writes, and that
+# write already fails soft); LD_PRELOAD/DYLD_* (neither half holds — `unset`
+# does not break the shell, the loader stores no credential, and "mien should
+# not be an injection channel" is a sandbox claim this check cannot back, granting
 # nothing the user could not do with `export`).
 SHELL_CRITICAL_VARS: dict[str, str] = {
     # (a) The shell finds every program through it — and so does mien's own
@@ -147,13 +149,13 @@ SHELL_CRITICAL_VARS: dict[str, str] = {
 # The ONE list of these names: `cli.capture_context` reads it to detect a
 # harness, `config.check_custom_var_name` to refuse the same names as `custom`
 # credentials. A second copy would let the two drift, and a marker mien detects
-# but does not refuse is one the scrub can `unset`.
+# but does not refuse is one `scrub_vars` can `unset`.
 #
 # They sit in their own map because neither half of the SHELL_CRITICAL_VARS rule
 # holds: `unset CLAUDECODE` breaks nothing, and a credential exported over it
 # still reads as "detected". What disqualifies them is a third property — mien
-# reads the variable as a signal whose ABSENCE is the permissive state, so the
-# scrub's `unset` is what moves it to the unsafe side. Same blast radius as the
+# reads the variable as a signal whose ABSENCE is the permissive state, so
+# `scrub_vars`'s `unset` is what moves it to the unsafe side. Same blast radius as the
 # other rule, quieter damage: a broken PATH is self-evident, a disarmed refusal
 # shows up only as a secret printed when you expected it withheld.
 CAPTURE_MARKER_VARS: dict[str, str] = {

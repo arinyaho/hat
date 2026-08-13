@@ -21,7 +21,8 @@ BUILTIN_SLACK_TOKEN = "mien-{profile}-slack-{workspace}-token"
 # secret; `workspace` separates two Slack workspaces. `slack_token` takes no
 # `service` because the literal "slack" is the template's own text.
 #
-# This is EXACTLY the set each template is supplied with, so
+# This is EXACTLY the set each template is supplied with — read off the
+# `render_name` call sites in `mien login` — so
 # `_check_secret_name_template` reads it in both directions: a required token
 # the template does not spend collapses two credentials onto one secret, and a
 # field it asks for that is not here cannot render at all. A new call site that

@@ -25,21 +25,25 @@ ZSHENV_END = "# <<< mien ambient (zshenv) <<<"
 # it" is not enough: `~/.zshenv` is read by every zsh including scripts, `zsh
 # -c`, launchd jobs and cron, and a parameter missing from any of those
 # collapses the scope there. So a terminal application does not count, nor does
-# a parent interactive shell — the top-level shell reading `~/.zshenv` inherits
-# nothing, and `~/.zshrc` and `~/.zprofile` have not run yet.
+# a parent interactive shell — a child zsh inherits what its parent exported,
+# but the top-level shell reading `~/.zshenv` does not, and it is the one the
+# generated script must be correct for. Exports from `~/.zshrc` and
+# `~/.zprofile` do not count either: zsh reads `~/.zshenv` FIRST.
 #
 # A wrong entry is a false negative in the dangerous direction: it suppresses
 # the warning while the scope silently widens and can select credentials
 # everywhere. A missing entry costs one extra warning. So every entry must be
-# verifiable by probing zsh, and anything doubtful stays off — as does anything
-# so common that warning about it teaches users to ignore the warning. Set but
-# empty counts as unset, an empty expansion collapsing the scope exactly like a
-# missing parameter.
+# verifiable by probing zsh, and anything doubtful stays off. A ubiquitous
+# parameter like `HOME` belongs ON the list: being listed suppresses the
+# warning, and warning about it would teach users to ignore the ones that fire
+# for real. Set but empty counts as unset, an empty expansion collapsing the
+# scope exactly like a missing parameter.
 #
 # Absent for that reason: TTY (zsh sets it empty whenever stdin is not a
 # terminal, which is most shells reading `~/.zshenv`); ZDOTDIR (zsh never sets
-# it, and if the user did, zsh reads `$ZDOTDIR/.zshenv` and this code is not
-# running); HOSTNAME (zsh sets HOST, and no login path exports HOSTNAME). `~`
+# it, and if the user did, zsh reads `$ZDOTDIR/.zshenv` rather than the
+# `~/.zshenv` `ensure_zshenv_sources` wires up, so this code is not running);
+# HOSTNAME (zsh sets HOST, and no login path exports HOSTNAME). `~`
 # needs no entry — tilde expansion consults the password database, surviving
 # even an unset HOME.
 ZSHENV_AVAILABLE_VARS = frozenset({

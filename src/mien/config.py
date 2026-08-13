@@ -271,7 +271,7 @@ def _config_to_dict(cfg: Config) -> dict:
             # default_factory and the schema documents an absent key as `{}`.
             #
             # Drop this once no mien predating `custom` reads a manifest written
-            # here — again, a fact about the fleet, not the file.
+            # here.
             **({"custom": dict(prof.custom)} if prof.custom else {}),
             "project_env": [asdict(s) for s in prof.project_env],
             "default_for": list(prof.default_for),
@@ -1080,7 +1080,8 @@ def _config_from_dict(raw: dict) -> Config:
     # every surface calls — so `mien guard` exited 0 with both streams empty and
     # waved through the mis-identity commit it exists to block. Checked here
     # against the same annotation as every other leaf, so it cannot drift from
-    # `BackendConfig.type: str`. `scalars_only` skips `options`.
+    # `BackendConfig.type: str`. `scalars_only` skips `options`, which is this
+# block's remaining keys rather than a key of its own.
     #
     # TYPE only. A string that is not a backend mien has ("keychain", the
     # retired "oci_vault") belongs to `ensure_known_backend`, which carries the
