@@ -221,11 +221,22 @@ def test_a_real_shell_sourcing_the_loader_loses_the_previous_key(tmp_path, monke
     assert "profile=personal" in out.stdout
 
 
-def test_emit_unset_clears_custom_names_too():
-    from mien.shell import emit_unset
-    out = emit_unset({"work": _profile("work", custom={"ANTHROPIC_API_KEY": "ref://a"})})
-    assert "unset ANTHROPIC_API_KEY" in out
-    assert "unset MIEN_PROFILE" in out
+def test_emit_unset_is_exactly_the_scrub_list():
+    """Not a list of names — a pin on the whole list, and it has to stay one.
+
+    `mien unset` is the ONLY path that takes an interactive shell to *no*
+    identity: `emit_use`'s scrub runs only when some other profile is being
+    activated. So a name missing here is not cleared by anything else — it
+    survives into the next command with the previous identity's value (a stale
+    `GOOGLE_APPLICATION_CREDENTIALS` still pointing at that key file) while
+    `mien status` reports nothing active. Derived from `scrub_vars`, with no
+    hand-written names, so a built-in added later cannot be silently dropped
+    from this path while the assertions still read as green.
+    """
+    from mien.shell import emit_unset, scrub_vars
+    profiles = {"work": _profile("work", custom={"ANTHROPIC_API_KEY": "ref://a"})}
+    out = emit_unset(profiles)
+    assert out.split() == [w for v in scrub_vars(profiles) for w in ("unset", v)]
 
 
 def test_the_packaged_schema_reference_lists_exactly_the_taken_names():
