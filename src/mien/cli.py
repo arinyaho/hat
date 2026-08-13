@@ -37,7 +37,7 @@ from mien.config import (
     load_config,
     save_config,
 )
-from mien.env import build_env, plan_env
+from mien.env import PlannedVar, build_env, plan_env
 from mien.handover import refusal_reason
 from mien.manifest import (
     MANIFEST_SECRET_NAME,
@@ -628,9 +628,22 @@ def _identity_card(prof: Profile) -> str:
     # scrubbing, so a variable mien does not set is one another identity's
     # ambient value survives into. Reported even when nothing is exported —
     # that is exactly the profile where every variable is inherited.
-    if unset := [p for p in planned if not p.set]:
-        rows.append(("unset", ", ".join(p.var for p in unset)
-                     + " — an ambient value survives here"))
+    # Grouped by service, because the whole-service case is most of the list on
+    # a narrow profile and reads as noise flattened into ~19 bare names.
+    def _by_service(vars_: list[PlannedVar]) -> str:
+        groups: dict[str, list[str]] = {}
+        for p in vars_:
+            groups.setdefault(p.service, []).append(p.var)
+        return " · ".join(f"{s} ({', '.join(v)})" for s, v in groups.items())
+
+    if conditional := [p for p in planned if not p.set and p.configured]:
+        rows.append(("unset", _by_service(conditional)
+                     + " — configured, but this variable is not set; an ambient "
+                       "value survives here"))
+    if absent := [p for p in planned if not p.configured]:
+        rows.append(("no creds", _by_service(absent)
+                     + " — no credential on this profile; an ambient value "
+                       "survives here"))
     if prof.owns_remotes:
         rows.append(("owns", ", ".join(prof.owns_remotes)))
     if prof.default_for:
@@ -686,6 +699,7 @@ def whoami_cmd(profile: str | None, live: bool, as_json: bool) -> None:
             # MIEN_SLACK_TOKENS. Names, sources and conditions; never a value.
             "env": [
                 {"var": v.var, "service": v.service, "set": v.set,
+                 "configured": v.configured,
                  **({"note": v.note} if v.note else {})}
                 for v in plan_env(prof)
             ],

@@ -128,12 +128,13 @@ work — one identity, every provider
   slack      team-a
   ...
   exports    GH_TOKEN (github) · MIEN_SLACK_TOKENS, MIEN_SLACK_DEFAULT_TOKEN (slack) · …
-  unset      AWS_PROFILE — an ambient value survives here
+  unset      aws (AWS_PROFILE) — configured, but this variable is not set; an ambient value survives here
+  no creds   oci (OCI_CLI_PROFILE, OCI_CLI_CONFIG_FILE) · notion (NOTION_TOKEN) — no credential on this profile; an ambient value survives here
 ```
 
 Knowing a profile *has* a slack credential is not the same as knowing it arrives as `$MIEN_SLACK_TOKENS`, and the only command that used to answer the second question — `mien exec <profile> -- env` — is a secret dump, which an agent sandbox blocks. So the answer was reachable only by reading mien's source. The `exports` row closes that; `--json` carries the same as an `env` array for machines.
 
-The `unset` row is the half that bites: `exec` overlays the environment without scrubbing, so a variable mien does *not* set is one another identity's ambient value survives into.
+The `unset` and `no creds` rows are the half that bites: `exec` overlays the environment without scrubbing, so a variable mien does *not* set is one another identity's ambient value survives into. `no creds` is the worse case — a service this profile has no credential for at all, where *every* variable is inherited.
 
 ## Bind a workspace to an identity
 

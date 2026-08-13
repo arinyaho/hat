@@ -119,8 +119,41 @@ def test_whoami_card_omits_absent_providers(runner, tmp_path, monkeypatch):
     result = runner.invoke(main, ["whoami", "solo"])
     assert result.exit_code == 0
     assert "github" in result.output and "octocat" in result.output
-    # No google/aws/slack lines for a profile that doesn't have them.
-    assert "google" not in result.output and "aws" not in result.output
+    # No google/aws/slack *identity* line for a profile that doesn't have them —
+    # they appear only in the `no creds` warning, which is the point of that row.
+    identity = [ln for ln in result.output.splitlines() if "no creds" not in ln]
+    assert not any("google" in ln or "aws" in ln for ln in identity)
+
+
+def test_whoami_names_the_variables_of_a_service_the_profile_lacks(
+        runner, tmp_path, monkeypatch):
+    """The silent case: `exec` overlays without scrubbing, so a service this
+    profile has no credential for is fully ambient — an ambient GH_TOKEN acts as
+    another identity. The card and the JSON both have to say so."""
+    from mien.config import (BackendConfig, Config, NotionService, Profile,
+                             SecretNaming, save_config)
+    monkeypatch.setenv("MIEN_CONFIG", str(tmp_path / "c.json"))
+    save_config(Config(
+        schema_version=1,
+        secrets_backend=BackendConfig(type="macos_keychain", options={}),
+        bootstrap={}, secret_naming=SecretNaming(default=BUILTIN_DEFAULT,
+                                                 slack_token=BUILTIN_SLACK_TOKEN),
+        profiles={"noted": Profile(name="noted",
+                                   notion=NotionService(api_token_ref="n"))},
+    ))
+    card = runner.invoke(main, ["whoami", "noted"])
+    assert card.exit_code == 0
+    (row,) = [ln for ln in card.output.splitlines() if "no creds" in ln]
+    assert "github (GH_TOKEN, GIT_SSH_COMMAND)" in row
+    assert "ambient" in row
+
+    out = runner.invoke(main, ["whoami", "noted", "--json"])
+    assert out.exit_code == 0
+    env = {v["var"]: v for v in json.loads(out.output)["env"]}
+    assert env["GH_TOKEN"] == {"var": "GH_TOKEN", "service": "github",
+                               "set": False, "configured": False,
+                               "note": "this profile configures no github"}
+    assert env["NOTION_TOKEN"]["set"] and env["NOTION_TOKEN"]["configured"]
 
 
 def test_whoami_json_flag_still_emits_machine_readable(runner, tmp_path, monkeypatch):

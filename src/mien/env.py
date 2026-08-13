@@ -24,6 +24,35 @@ class EnvBundle:
 # put MIEN_PROFILE in the list of credentials a profile exports.
 MIEN_INTERNAL_OWNER = "mien itself"
 
+# Every environment variable a built-in service puts in the environment, and the
+# service that owns it. A map rather than a bare list because three readers need
+# the owner: the collision check that refuses a `custom` variable named after a
+# built-in has to say which service it would fight (`mien.config`), `plan_env`
+# has to name the variables of a service this profile does not configure, and
+# nothing else tells you that `GIT_SSH_COMMAND` is github's. Re-exported by
+# `mien.shell`, which derives the scrub list from it.
+BUILTIN_VARS: dict[str, str] = {
+    "MIEN_PROFILE": MIEN_INTERNAL_OWNER,
+    "MIEN_EPHEMERAL_DIR": MIEN_INTERNAL_OWNER,
+    "CLOUDSDK_ACTIVE_CONFIG_NAME": "google",
+    "CLOUDSDK_CORE_PROJECT": "google",
+    "GOOGLE_APPLICATION_CREDENTIALS": "google",
+    "GH_TOKEN": "github",
+    "MIEN_SLACK_TOKENS": "slack",
+    "MIEN_SLACK_DEFAULT_TOKEN": "slack",
+    "AWS_PROFILE": "aws",
+    "AWS_DEFAULT_REGION": "aws",
+    "AWS_ACCESS_KEY_ID": "aws",
+    "AWS_SECRET_ACCESS_KEY": "aws",
+    "OCI_CLI_PROFILE": "oci",
+    "OCI_CLI_CONFIG_FILE": "oci",
+    "ATLASSIAN_EMAIL": "atlassian",
+    "ATLASSIAN_API_TOKEN": "atlassian",
+    "ATLASSIAN_BASE_URL": "atlassian",
+    "NOTION_TOKEN": "notion",
+    "GIT_SSH_COMMAND": "github",
+}
+
 
 @dataclass(frozen=True)
 class PlannedVar:
@@ -33,6 +62,11 @@ class PlannedVar:
     service: str
     set: bool
     note: str = ""
+    # False when the profile has no such service at all, as opposed to a
+    # configured service whose variable is conditional. Both are ambient under
+    # `exec`, but the remedies differ: add the credential, versus fill in the
+    # field the service is missing.
+    configured: bool = True
 
 
 def plan_env(profile: Profile) -> list[PlannedVar]:
@@ -119,6 +153,17 @@ def plan_env(profile: Profile) -> list[PlannedVar]:
         plan.append(PlannedVar("NOTION_TOKEN", "notion", True))
     for var in profile.custom:
         plan.append(PlannedVar(var, "custom", True, "a credential of your own"))
+    # And every built-in belonging to a service this profile does not configure
+    # at all — the worst case, and the one the blocks above are structurally
+    # blind to: not one conditional variable missing but a whole service
+    # ambient, so `gh` under `exec` acts as whoever the parent environment was.
+    named = {p.var for p in plan}
+    plan += [
+        PlannedVar(var, service, False,
+                   f"this profile configures no {service}", configured=False)
+        for var, service in BUILTIN_VARS.items()
+        if var not in named and service != MIEN_INTERNAL_OWNER
+    ]
     return plan
 
 
