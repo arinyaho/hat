@@ -226,7 +226,7 @@ $MIEN exec work-foo -- sh -c 'TOKEN=$(jq -r ".\"team-a\"" "$MIEN_SLACK_TOKENS");
 
 If the profile has only one workspace, `$MIEN_SLACK_DEFAULT_TOKEN` is also exported.
 
-There is deliberately no `mien token slack`: a profile may hold several workspaces, so there is no single "the token" to print — the credential is a map, and `exec` is the interface. Asking for one says so and points here rather than failing with a bare "invalid choice". The same holds for `aws`, `oci` and `custom`.
+There is deliberately no `mien token slack`: a profile may hold several workspaces, so there is no single "the token" to print — the credential is a map, and `exec` is the interface. Asking for one says so and points here rather than failing with a bare "invalid choice". The same holds for `aws`, `oci`, `github` and `custom` — each names the `exec` form that works.
 
 For Atlassian (Jira/Confluence):
 
