@@ -1,6 +1,6 @@
 {
   "name": "mien",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Multi-identity credential router for Google, GitHub, Slack, Atlassian, Notion, AWS, and OCI — activate the right account in this shell without polluting global state.",
   "author": {
     "name": "arinyaho",

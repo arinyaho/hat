@@ -1,7 +1,7 @@
 ---
 name: mien
 description: Use when the user wants to act as a specific identity/profile across Google (Gmail/Calendar/Drive/GCP), GitHub, Slack, Atlassian, Notion, AWS, or OCI — e.g., "as my work account", "switch to <name>", "post in <workspace>", "send mail from <email>". Also covers a credential of the user's own kept per identity — an LLM API key, an npm/PyPI token, a database URL — delivered as an environment variable ("my work Anthropic key", "the npm token for this profile"). Activates per-shell credentials for `gh`, `gcloud`, `bq`, `aws`, `oci`, and `curl` calls without polluting other agent sessions.
-version: 0.6.0
+version: 0.7.0
 author: arinyaho
 license: MIT
 compatibility: works best with `mien` on PATH; falls back to source if available
