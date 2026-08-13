@@ -364,6 +364,18 @@ def test_a_present_but_unusable_service_block_is_reported(profiles, expect):
     assert expect in str(exc.value)
 
 
+def test_the_same_slack_workspace_twice_is_refused():
+    """`build_env` keys its token map by workspace name, so a second entry for
+    one workspace silently replaces the first one's token — a credential lost
+    without a word. Refused at parse instead."""
+    with pytest.raises(ConfigError) as exc:
+        deserialize_config(_raw({"work": {"slack": [
+            {"workspace": "team-a", "user_token_ref": "r1"},
+            {"workspace": "team-a", "user_token_ref": "r2"},
+        ]}}))
+    assert "profile 'work': slack lists the same workspace twice: team-a" in str(exc.value)
+
+
 def test_save_creates_parent_dir_and_chmods_600(monkeypatch, tmp_path):
     target = tmp_path / "deep" / "nested" / "config.json"
     monkeypatch.setenv("MIEN_CONFIG", str(target))

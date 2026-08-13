@@ -353,14 +353,38 @@ class TestPlanEnvMatchesBuildEnv:
                                   adc_ref=None, gcloud_config_name="g",
                                   default_project=None)},
          {"GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CORE_PROJECT"}),
+        # A stored OAuth refresh token is useless without the client secret: no
+        # ADC file is written, so no GOOGLE_APPLICATION_CREDENTIALS.
+        ({"google": GoogleService(email="m@x", oauth_client_id="c",
+                                  oauth_client_secret_ref=None,
+                                  refresh_token_ref="refresh-ref",
+                                  adc_ref=None, gcloud_config_name="g",
+                                  default_project="proj")},
+         {"GOOGLE_APPLICATION_CREDENTIALS"}),
         ({"github": GitHubService(username="o", host="github.com", token_ref=None,
                                   ssh_key_path="/k")}, {"GH_TOKEN"}),
+        # The key arrives from the backend rather than a path: still a
+        # GIT_SSH_COMMAND, so the plan must not key off ssh_key_path alone.
+        ({"github": GitHubService(username="o", host="github.com", token_ref=None,
+                                  ssh_key_path=None, ssh_key_ref="gh-ssh-ref")},
+         {"GH_TOKEN"}),
         ({"aws": AWSService(access_key_id_ref=None, secret_access_key_ref=None,
                             profile="work", region=None)},
          {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION"}),
+        # Half an access key is no access key: neither half is exported.
+        ({"aws": AWSService(access_key_id_ref="aws-key-ref", secret_access_key_ref=None,
+                            profile="work", region="us-west-1")},
+         {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}),
         ({"slack": [SlackWorkspace(workspace="team-a", user_token_ref="slack-team-a-ref"),
                     SlackWorkspace(workspace="team-b", user_token_ref="slack-team-b-ref")]},
          {"MIEN_SLACK_DEFAULT_TOKEN"}),
+        # `build_env` keys its token map by workspace name, so two entries for
+        # one workspace are one workspace and the default token *is* set. The
+        # config parser refuses this shape; the parity still has to hold for a
+        # Profile built any other way.
+        ({"slack": [SlackWorkspace(workspace="team-a", user_token_ref="slack-team-a-ref"),
+                    SlackWorkspace(workspace="team-a", user_token_ref="slack-other-ref")]},
+         set()),
         ({"oci": OCIService(profile=None, config_file=None)},
          {"OCI_CLI_PROFILE", "OCI_CLI_CONFIG_FILE"}),
     ])

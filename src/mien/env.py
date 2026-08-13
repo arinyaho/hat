@@ -80,7 +80,9 @@ def plan_env(profile: Profile) -> list[PlannedVar]:
                        "" if key else "no SSH key configured"),
         ]
     if profile.slack:
-        one = len(profile.slack) == 1
+        # By workspace name, because `build_env` keys its token map by name and
+        # so counts the deduped set, not the entries.
+        one = len({w.workspace for w in profile.slack}) == 1
         plan += [
             PlannedVar("MIEN_SLACK_TOKENS", "slack", True,
                        "path to a 0600 JSON map of workspace → token"),

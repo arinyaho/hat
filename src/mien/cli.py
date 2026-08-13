@@ -616,19 +616,21 @@ def _identity_card(prof: Profile) -> str:
     # secret dump an agent sandbox blocks, so the honest conclusion from a
     # blocked dump was that mien does not support slack. Names only; the values
     # are exactly what this card refuses to print.
-    exports = [p for p in plan_env(prof) if p.set and p.service != MIEN_INTERNAL_OWNER]
+    planned = plan_env(prof)
+    exports = [p for p in planned if p.set and p.service != MIEN_INTERNAL_OWNER]
     if exports:
         by_service: dict[str, list[str]] = {}
         for p in exports:
             by_service.setdefault(p.service, []).append(p.var)
         rows.append(("exports", " · ".join(
             f"{', '.join(v)} ({s})" for s, v in by_service.items())))
-        # Absence is the answer that matters most: `exec` overlays without
-        # scrubbing, so a variable mien does not set is one another identity's
-        # ambient value survives into.
-        if unset := [p for p in plan_env(prof) if not p.set]:
-            rows.append(("unset", ", ".join(p.var for p in unset)
-                         + " — an ambient value survives here"))
+    # Absence is the answer that matters most: `exec` overlays without
+    # scrubbing, so a variable mien does not set is one another identity's
+    # ambient value survives into. Reported even when nothing is exported —
+    # that is exactly the profile where every variable is inherited.
+    if unset := [p for p in planned if not p.set]:
+        rows.append(("unset", ", ".join(p.var for p in unset)
+                     + " — an ambient value survives here"))
     if prof.owns_remotes:
         rows.append(("owns", ", ".join(prof.owns_remotes)))
     if prof.default_for:

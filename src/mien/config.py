@@ -1160,6 +1160,16 @@ def _config_from_dict(raw: dict) -> Config:
             for i, w in enumerate(
                 _object_list_from_raw(f"profile {name!r}: slack", p.get("slack")))
         ]
+        # `build_env` keys the token map by workspace name, so a repeated name
+        # silently drops the earlier entry's token — the wrong-identity failure
+        # this tool must never take quietly. Refused here rather than resolved.
+        if dupes := sorted({w.workspace for w in slack
+                            if [x.workspace for x in slack].count(w.workspace) > 1}):
+            raise ConfigError(
+                f"profile {name!r}: slack lists the same workspace twice: "
+                f"{', '.join(dupes)}. Each workspace needs one entry; keep the "
+                f"token you want and delete the other."
+            )
         aws = _service_from_raw(AWSService, name, "aws", p)
         oci = _service_from_raw(OCIService, name, "oci", p)
         atlassian = _service_from_raw(AtlassianService, name, "atlassian", p)
