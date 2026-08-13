@@ -397,35 +397,19 @@ def test_prompt_is_silent_without_a_config(tmp_path, monkeypatch):
     assert result.exit_code == 0 and result.output == ""
 
 
-def test_prompt_says_so_on_an_unreadable_config(tmp_path, monkeypatch):
-    # A blank prompt segment reads as "nothing to report", when in fact mien can
-    # no longer tell who you are here — so it shows a marker instead of nothing.
+def test_prompt_reports_an_unreadable_config_inside_the_prompt_line(tmp_path, monkeypatch):
+    # A blank segment reads as "nothing to report" when in fact mien can no
+    # longer tell who you are here, so it shows a marker instead of nothing —
+    # on stdout, because a prompt redraws constantly and stderr would spam the
+    # terminal every redraw, and short enough to sit in a prompt line.
     _write_broken_cfg(tmp_path, monkeypatch)
     result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
                          remote="https://github.com/acme-core/api.git")
     assert result.exit_code == 0  # a prompt command must never fail the shell
     assert "mien:config" in result.stdout
-
-
-def test_prompt_puts_the_config_marker_on_stdout_not_stderr(tmp_path, monkeypatch):
-    # Deliberate, and easy for a later refactor to flip: a prompt redraws
-    # constantly and its stderr goes straight to the terminal, so a message
-    # there would spam every redraw. The marker rides in the segment instead.
-    _write_broken_cfg(tmp_path, monkeypatch)
-    result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
-                         remote="https://github.com/acme-core/api.git")
-    assert "mien:config" in result.stdout
     assert result.stderr == ""
-
-
-def test_prompt_config_marker_stays_compact(tmp_path, monkeypatch):
-    # It has to sit inside a prompt line: no newline (same as a healthy
-    # segment), and no parse detail — `mien doctor` is where that belongs.
-    _write_broken_cfg(tmp_path, monkeypatch)
-    result = _run_prompt("/flat/api", monkeypatch, mien_profile="work",
-                         remote="https://github.com/acme-core/api.git")
     assert "\n" not in result.stdout
-    assert "invalid config JSON" not in result.stdout
+    assert "invalid config JSON" not in result.stdout   # detail belongs in `mien doctor`
     assert str(tmp_path) not in result.stdout
     assert len(_ANSI.sub("", result.stdout)) <= 32
 
