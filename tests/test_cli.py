@@ -3085,14 +3085,19 @@ class TestProfileExportsAreDiscoverable:
         adc = next(e for e in env if e["var"] == "GOOGLE_APPLICATION_CREDENTIALS")
         assert adc["set"] is False and adc["note"]
 
-    def test_no_view_prints_a_value(self, runner, tmp_path, monkeypatch):
+    def test_no_view_prints_a_value(self, runner, tmp_path, monkeypatch, mocker):
         """The discovery path has to survive a policy that blocks secret dumps,
-        so it must never become one."""
+        so it must never become one. The backend hands out obviously
+        secret-shaped values to anything that asks, so a view that resolves one
+        prints it — and asking at all is itself the failure."""
         _rich_profile_cfg(tmp_path, monkeypatch)
+        backend = mocker.patch("mien.cli.load_backend").return_value
+        backend.get.return_value = b"xoxp-111-222-deadbeef"
         for argv in (["whoami", "work"], ["whoami", "work", "--json"], ["list"]):
             out = runner.invoke(main, argv).output
             for leak in ("xox", "ghp_", "AKIA", "ntn_", "ATATT"):
                 assert leak not in out, f"{argv} leaked {leak}"
+            backend.get.assert_not_called()
 
     def test_token_slack_points_at_the_command_that_works(self, runner, tmp_path, monkeypatch):
         """Typing `mien token slack` is the right goal at the wrong door. A bare
