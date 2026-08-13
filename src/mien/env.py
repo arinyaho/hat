@@ -54,6 +54,14 @@ BUILTIN_VARS: dict[str, str] = {
 }
 
 
+# The one built-in whose absence is NOT an ambient inheritance: `cli.main()` pops
+# it from `os.environ` on every invocation, so it is already gone from the parent
+# environment `exec` overlays and the child gets nothing. Named here so the
+# identity card does not lump it in with the variables an ambient value survives
+# into — the opposite of the truth, in a security-facing row.
+STRIPPED_VAR = "GOOGLE_APPLICATION_CREDENTIALS"
+
+
 @dataclass(frozen=True)
 class PlannedVar:
     """One variable `build_env` would set, named without being valued."""
@@ -102,7 +110,8 @@ def plan_env(profile: Profile) -> list[PlannedVar]:
             PlannedVar("GOOGLE_APPLICATION_CREDENTIALS", "google", adc,
                        "an ADC file path, not a token" if adc else
                        "no stored OAuth credentials — a gcloud login alone produces no "
-                       "ADC file, so a client library falls back to the machine's ambient ADC"),
+                       "ADC file; mien strips this variable rather than inheriting it, "
+                       "so a client library falls back to the machine's ambient ADC"),
         ]
     if gh:
         key = bool(gh.ssh_key_ref or gh.ssh_key_path)
@@ -160,7 +169,10 @@ def plan_env(profile: Profile) -> list[PlannedVar]:
     named = {p.var for p in plan}
     plan += [
         PlannedVar(var, service, False,
-                   f"this profile configures no {service}", configured=False)
+                   f"this profile configures no {service}"
+                   + ("; mien strips this variable rather than inheriting it"
+                      if var == STRIPPED_VAR else ""),
+                   configured=False)
         for var, service in BUILTIN_VARS.items()
         if var not in named and service != MIEN_INTERNAL_OWNER
     ]

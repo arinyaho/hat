@@ -42,6 +42,36 @@ def test_status_active(runner, mien_cfg, monkeypatch):
     assert "personal" in result.output
 
 
+def test_status_prints_a_value_only_for_the_pinned_non_secret_vars(
+        runner, mien_cfg, monkeypatch):
+    """`status` masks on an allowlist, so the allowlist is the security boundary.
+
+    Every built-in set to a marker; the marker may appear only for the names
+    spelled out here. Adding a secret-bearing name to `NON_SECRET_VARS` — say
+    `AWS_SECRET_ACCESS_KEY` — makes `status` print it verbatim and fails here.
+    """
+    from mien.env import BUILTIN_VARS, MIEN_INTERNAL_OWNER
+    for var in BUILTIN_VARS:
+        monkeypatch.setenv(var, "MARKER-" + var)
+    monkeypatch.setenv("MIEN_PROFILE", "personal")
+    out = runner.invoke(main, ["status"]).output
+    visible = {ln.split("=", 1)[0].strip() for ln in out.splitlines()
+               if "=MARKER-" in ln}
+    assert visible == {
+        "CLOUDSDK_ACTIVE_CONFIG_NAME", "CLOUDSDK_CORE_PROJECT",
+        "GIT_SSH_COMMAND", "MIEN_SLACK_TOKENS", "AWS_PROFILE",
+        "AWS_DEFAULT_REGION", "OCI_CLI_PROFILE", "OCI_CLI_CONFIG_FILE",
+        "ATLASSIAN_EMAIL", "ATLASSIAN_BASE_URL",
+    }
+    # GOOGLE_APPLICATION_CREDENTIALS is allowlisted but never reaches this
+    # display: `main()` pops it from the environment on every invocation.
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in out
+    # Everything else this display reaches is masked.
+    masked = {v for v, s in BUILTIN_VARS.items()
+              if s != MIEN_INTERNAL_OWNER} - visible - {"GOOGLE_APPLICATION_CREDENTIALS"}
+    assert all(f"  {v}=<set>" in out for v in masked)
+
+
 def test_init_writes_keychain_skeleton(runner, mien_cfg):
     result = runner.invoke(main, ["init"], input="2\nmien-\n")
     assert result.exit_code == 0, result.output
@@ -121,7 +151,8 @@ def test_whoami_card_omits_absent_providers(runner, tmp_path, monkeypatch):
     assert "github" in result.output and "octocat" in result.output
     # No google/aws/slack *identity* line for a profile that doesn't have them —
     # they appear only in the `no creds` warning, which is the point of that row.
-    identity = [ln for ln in result.output.splitlines() if "no creds" not in ln]
+    identity = [ln for ln in result.output.splitlines()
+                if "no creds" not in ln and "stripped" not in ln]
     assert not any("google" in ln or "aws" in ln for ln in identity)
 
 

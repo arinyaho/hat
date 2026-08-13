@@ -37,7 +37,7 @@ from mien.config import (
     load_config,
     save_config,
 )
-from mien.env import PlannedVar, build_env, plan_env
+from mien.env import STRIPPED_VAR, PlannedVar, build_env, plan_env
 from mien.handover import refusal_reason
 from mien.manifest import (
     MANIFEST_SECRET_NAME,
@@ -636,14 +636,24 @@ def _identity_card(prof: Profile) -> str:
             groups.setdefault(p.service, []).append(p.var)
         return " · ".join(f"{s} ({', '.join(v)})" for s, v in groups.items())
 
-    if conditional := [p for p in planned if not p.set and p.configured]:
+    # `main()` pops STRIPPED_VAR from the environment on every invocation, so it
+    # is the one built-in that does NOT inherit an ambient value when unset — it
+    # gets its own row rather than a claim in the opposite direction.
+    if conditional := [p for p in planned
+                       if not p.set and p.configured and p.var != STRIPPED_VAR]:
         rows.append(("unset", _by_service(conditional)
                      + " — configured, but this variable is not set; an ambient "
                        "value survives here"))
-    if absent := [p for p in planned if not p.configured]:
+    if absent := [p for p in planned
+                  if not p.configured and p.var != STRIPPED_VAR]:
         rows.append(("no creds", _by_service(absent)
                      + " — no credential on this profile; an ambient value "
                        "survives here"))
+    if stripped := [p for p in planned if not p.set and p.var == STRIPPED_VAR]:
+        rows.append(("stripped", _by_service(stripped)
+                     + " — not set, and mien removes any ambient value, so it "
+                       "arrives empty (a client library falls back to the "
+                       "machine's own ADC file)"))
     if prof.owns_remotes:
         rows.append(("owns", ", ".join(prof.owns_remotes)))
     if prof.default_for:
@@ -698,9 +708,11 @@ def whoami_cmd(profile: str | None, live: bool, as_json: bool) -> None:
             # otherwise has to grep the package to learn that slack arrives as
             # MIEN_SLACK_TOKENS. Names, sources and conditions; never a value.
             "env": [
+                # Every key on every entry, `note` included even when empty:
+                # the consumer is an agent parsing the shape SKILL.md documents,
+                # and a key that vanishes on some entries is a KeyError there.
                 {"var": v.var, "service": v.service, "set": v.set,
-                 "configured": v.configured,
-                 **({"note": v.note} if v.note else {})}
+                 "configured": v.configured, "note": v.note}
                 for v in plan_env(prof)
             ],
             "owns_remotes": list(prof.owns_remotes),
